@@ -1,43 +1,79 @@
+import logging
 import os
 import sys
-from modules.paths_internal import models_path, script_path, data_path, extensions_dir, extensions_builtin_dir  # noqa: F401
+import warnings
+from contextlib import redirect_stderr, redirect_stdout
 
-import modules.safe  # noqa: F401
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+warnings.filterwarnings("ignore")
 
+with open(os.devnull, "w") as f:
+    with redirect_stdout(f):
+        # isort: off
+        import torch
+        import pytorch_lightning
 
-# data_path = cmd_opts_pre.data
-sys.path.insert(0, script_path)
+        # isort: on
+        import modules.paths
+        import modules.safe  # noqa: F401
+        from modules.paths_internal import data_path  # noqa: F401
+        from modules.paths_internal import (
+            extensions_builtin_dir,
+            extensions_dir,
+            models_path,
+            script_path,
+        )
 
-# search for directory of stable diffusion in following places
-sd_path = None
-possible_sd_paths = [os.path.join(script_path, 'repositories/stable-diffusion-stability-ai'), '.', os.path.dirname(script_path)]
-for possible_sd_path in possible_sd_paths:
-    if os.path.exists(os.path.join(possible_sd_path, 'ldm/models/diffusion/ddpm.py')):
-        sd_path = os.path.abspath(possible_sd_path)
-        break
+        # data_path = cmd_opts_pre.data
+        sys.path.insert(0, script_path)
 
-assert sd_path is not None, f"Couldn't find Stable Diffusion in any of: {possible_sd_paths}"
+        # search for directory of stable diffusion in following places
+        sd_path = None
+        possible_sd_paths = [
+            os.path.join(script_path, "repositories/stable-diffusion-stability-ai"),
+            ".",
+            os.path.dirname(script_path),
+        ]
+        for possible_sd_path in possible_sd_paths:
+            if os.path.exists(
+                os.path.join(possible_sd_path, "ldm/models/diffusion/ddpm.py")
+            ):
+                sd_path = os.path.abspath(possible_sd_path)
+                break
 
-path_dirs = [
-    (sd_path, 'ldm', 'Stable Diffusion', []),
-    (os.path.join(sd_path, '../CodeFormer'), 'inference_codeformer.py', 'CodeFormer', []),
-    (os.path.join(sd_path, '../BLIP'), 'models/blip.py', 'BLIP', []),
-    (os.path.join(sd_path, '../k-diffusion'), 'k_diffusion/sampling.py', 'k_diffusion', ["atstart"]),
-]
+        assert (
+            sd_path is not None
+        ), f"Couldn't find Stable Diffusion in any of: {possible_sd_paths}"
 
-paths = {}
+        path_dirs = [
+            (sd_path, "ldm", "Stable Diffusion", []),
+            (
+                os.path.join(sd_path, "../k-diffusion"),
+                "k_diffusion/sampling.py",
+                "k_diffusion",
+                ["atstart"],
+            ),
+        ]
 
-for d, must_exist, what, options in path_dirs:
-    must_exist_path = os.path.abspath(os.path.join(script_path, d, must_exist))
-    if not os.path.exists(must_exist_path):
-        print(f"Warning: {what} not found at path {must_exist_path}", file=sys.stderr)
-    else:
-        d = os.path.abspath(d)
-        if "atstart" in options:
-            sys.path.insert(0, d)
-        else:
-            sys.path.append(d)
-        paths[what] = d
+        paths = {}
+
+        for d, must_exist, what, options in path_dirs:
+            must_exist_path = os.path.abspath(os.path.join(script_path, d, must_exist))
+            if not os.path.exists(must_exist_path):
+                print(
+                    f"Warning: {what} not found at path {must_exist_path}",
+                    file=sys.stderr,
+                )
+            else:
+                d = os.path.abspath(d)
+                if "atstart" in options:
+                    sys.path.insert(0, d)
+                else:
+                    sys.path.append(d)
+                paths[what] = d
+
+        import ldm.modules.diffusionmodules.model
 
 
 class Prioritize:

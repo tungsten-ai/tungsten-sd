@@ -3,7 +3,7 @@ from collections import namedtuple
 
 import torch
 
-from modules import prompt_parser, devices, sd_hijack
+from modules import devices, prompt_parser, sd_hijack
 from modules.shared import opts
 
 
@@ -21,7 +21,7 @@ class PromptChunk:
         self.fixes = []
 
 
-PromptChunkFix = namedtuple('PromptChunkFix', ['offset', 'embedding'])
+PromptChunkFix = namedtuple("PromptChunkFix", ["offset", "embedding"])
 """An object of this type is a marker showing that textual inversion embedding's vectors have to placed at offset in the prompt
 chunk. Thos objects are found in PromptChunk.fixes and, are placed into FrozenCLIPEmbedderWithCustomWordsBase.hijack.fixes, and finally
 are applied by sd_hijack.EmbeddingsWithFixes's forward function."""
@@ -73,7 +73,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
     def encode_embedding_init_text(self, init_text, nvpt):
         """Converts text into a tensor with this text's tokens' embeddings. Note that those are embeddings before they are passed through
-        transformers. nvpt is used as a maximum length in tokens. If text produces less teokens than nvpt, only this many is returned."""
+        transformers. nvpt is used as a maximum length in tokens. If text produces less teokens than nvpt, only this many is returned.
+        """
 
         raise NotImplementedError
 
@@ -98,7 +99,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         def next_chunk(is_last=False):
             """puts current chunk into the list of results and produces the next one - empty;
-            if is_last is true, tokens <end-of-text> tokens at the end won't add to token_count"""
+            if is_last is true, tokens <end-of-text> tokens at the end won't add to token_count
+            """
             nonlocal token_count
             nonlocal last_comma
             nonlocal chunk
@@ -121,7 +123,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             chunk = PromptChunk()
 
         for tokens, (text, weight) in zip(tokenized, parsed):
-            if text == 'BREAK' and weight == -1:
+            if text == "BREAK" and weight == -1:
                 next_chunk()
                 continue
 
@@ -134,7 +136,12 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
                 # this is when we are at the end of alloted 75 tokens for the current chunk, and the current token is not a comma. opts.comma_padding_backtrack
                 # is a setting that specifies that if there is a comma nearby, the text after the comma should be moved out of this chunk and into the next.
-                elif opts.comma_padding_backtrack != 0 and len(chunk.tokens) == self.chunk_length and last_comma != -1 and len(chunk.tokens) - last_comma <= opts.comma_padding_backtrack:
+                elif (
+                    opts.comma_padding_backtrack != 0
+                    and len(chunk.tokens) == self.chunk_length
+                    and last_comma != -1
+                    and len(chunk.tokens) - last_comma <= opts.comma_padding_backtrack
+                ):
                     break_location = last_comma + 1
 
                     reloc_tokens = chunk.tokens[break_location:]
@@ -150,7 +157,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                 if len(chunk.tokens) == self.chunk_length:
                     next_chunk()
 
-                embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, position)
+                embedding, embedding_length_in_tokens = None, None
                 if embedding is None:
                     chunk.tokens.append(token)
                     chunk.multipliers.append(weight)
@@ -207,6 +214,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         if opts.use_old_emphasis_implementation:
             import modules.sd_hijack_clip_old
+
             return modules.sd_hijack_clip_old.forward_old(self, texts)
 
         batch_chunks, token_count = self.process_texts(texts)
@@ -216,7 +224,10 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         zs = []
         for i in range(chunk_count):
-            batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
+            batch_chunk = [
+                chunks[i] if i < len(chunks) else self.empty_chunk()
+                for chunks in batch_chunks
+            ]
 
             tokens = [x.tokens for x in batch_chunk]
             multipliers = [x.multipliers for x in batch_chunk]
@@ -230,7 +241,12 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             zs.append(z)
 
         if len(used_embeddings) > 0:
-            embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
+            embeddings_list = ", ".join(
+                [
+                    f"{name} [{embedding.checksum()}]"
+                    for name, embedding in used_embeddings.items()
+                ]
+            )
             self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
 
         return torch.hstack(zs)
@@ -249,14 +265,16 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         if self.id_end != self.id_pad:
             for batch_pos in range(len(remade_batch_tokens)):
                 index = remade_batch_tokens[batch_pos].index(self.id_end)
-                tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
+                tokens[batch_pos, index + 1 : tokens.shape[1]] = self.id_pad
 
         z = self.encode_with_transformers(tokens)
 
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
         original_mean = z.mean()
-        z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+        z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(
+            z.shape
+        )
         new_mean = z.mean()
         z = z * (original_mean / new_mean)
 
@@ -270,20 +288,24 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
 
         vocab = self.tokenizer.get_vocab()
 
-        self.comma_token = vocab.get(',</w>', None)
+        self.comma_token = vocab.get(",</w>", None)
 
         self.token_mults = {}
-        tokens_with_parens = [(k, v) for k, v in vocab.items() if '(' in k or ')' in k or '[' in k or ']' in k]
+        tokens_with_parens = [
+            (k, v)
+            for k, v in vocab.items()
+            if "(" in k or ")" in k or "[" in k or "]" in k
+        ]
         for text, ident in tokens_with_parens:
             mult = 1.0
             for c in text:
-                if c == '[':
+                if c == "[":
                     mult /= 1.1
-                if c == ']':
+                if c == "]":
                     mult *= 1.1
-                if c == '(':
+                if c == "(":
                     mult *= 1.1
-                if c == ')':
+                if c == ")":
                     mult /= 1.1
 
             if mult != 1.0:
@@ -294,12 +316,16 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
         self.id_pad = self.id_end
 
     def tokenize(self, texts):
-        tokenized = self.wrapped.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
+        tokenized = self.wrapped.tokenizer(
+            texts, truncation=False, add_special_tokens=False
+        )["input_ids"]
 
         return tokenized
 
     def encode_with_transformers(self, tokens):
-        outputs = self.wrapped.transformer(input_ids=tokens, output_hidden_states=-opts.CLIP_stop_at_last_layers)
+        outputs = self.wrapped.transformer(
+            input_ids=tokens, output_hidden_states=-opts.CLIP_stop_at_last_layers
+        )
 
         if opts.CLIP_stop_at_last_layers > 1:
             z = outputs.hidden_states[-opts.CLIP_stop_at_last_layers]
@@ -311,7 +337,11 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
 
     def encode_embedding_init_text(self, init_text, nvpt):
         embedding_layer = self.wrapped.transformer.text_model.embeddings
-        ids = self.wrapped.tokenizer(init_text, max_length=nvpt, return_tensors="pt", add_special_tokens=False)["input_ids"]
-        embedded = embedding_layer.token_embedding.wrapped(ids.to(embedding_layer.token_embedding.wrapped.weight.device)).squeeze(0)
+        ids = self.wrapped.tokenizer(
+            init_text, max_length=nvpt, return_tensors="pt", add_special_tokens=False
+        )["input_ids"]
+        embedded = embedding_layer.token_embedding.wrapped(
+            ids.to(embedding_layer.token_embedding.wrapped.weight.device)
+        ).squeeze(0)
 
         return embedded

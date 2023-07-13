@@ -3,9 +3,15 @@ import re
 import sys
 from collections import namedtuple
 
-import gradio as gr
-
-from modules import shared, paths, script_callbacks, extensions, script_loading, scripts_postprocessing, errors, timer
+from modules import (
+    errors,
+    paths,
+    script_callbacks,
+    script_loading,
+    scripts_postprocessing,
+    shared,
+    timer,
+)
 
 AlwaysVisible = object()
 
@@ -67,7 +73,7 @@ class Script:
          - False if the script should not be shown in UI at all
          - True if the script should be shown in UI if it's selected in the scripts dropdown
          - script.AlwaysVisible if the script should be shown in UI at all times
-         """
+        """
 
         return True
 
@@ -180,11 +186,11 @@ class Script:
         """helper function to generate id for a HTML element, constructs final id out of script name, tab and user-supplied item_id"""
 
         need_tabname = self.show(True) == self.show(False)
-        tabkind = 'img2img' if self.is_img2img else 'txt2txt'
+        tabkind = "img2img" if self.is_img2img else "txt2txt"
         tabname = f"{tabkind}_" if need_tabname else ""
-        title = re.sub(r'[^a-z_0-9]', '', re.sub(r'\s', '_', self.title().lower()))
+        title = re.sub(r"[^a-z_0-9]", "", re.sub(r"\s", "_", self.title().lower()))
 
-        return f'script_{tabname}{title}_{item_id}'
+        return f"script_{tabname}{title}_{item_id}"
 
 
 current_basedir = paths.script_path
@@ -202,7 +208,9 @@ ScriptFile = namedtuple("ScriptFile", ["basedir", "filename", "path"])
 
 scripts_data = []
 postprocessing_scripts_data = []
-ScriptClassData = namedtuple("ScriptClassData", ["script_class", "path", "basedir", "module"])
+ScriptClassData = namedtuple(
+    "ScriptClassData", ["script_class", "path", "basedir", "module"]
+)
 
 
 def list_scripts(scriptdirname, extension):
@@ -211,12 +219,15 @@ def list_scripts(scriptdirname, extension):
     basedir = os.path.join(paths.script_path, scriptdirname)
     if os.path.exists(basedir):
         for filename in sorted(os.listdir(basedir)):
-            scripts_list.append(ScriptFile(paths.script_path, filename, os.path.join(basedir, filename)))
+            scripts_list.append(
+                ScriptFile(paths.script_path, filename, os.path.join(basedir, filename))
+            )
 
-    for ext in extensions.active():
-        scripts_list += ext.list_files(scriptdirname, extension)
-
-    scripts_list = [x for x in scripts_list if os.path.splitext(x.path)[1].lower() == extension and os.path.isfile(x.path)]
+    scripts_list = [
+        x
+        for x in scripts_list
+        if os.path.splitext(x.path)[1].lower() == extension and os.path.isfile(x.path)
+    ]
 
     return scripts_list
 
@@ -224,7 +235,7 @@ def list_scripts(scriptdirname, extension):
 def list_files_with_name(filename):
     res = []
 
-    dirs = [paths.script_path] + [ext.path for ext in extensions.active()]
+    dirs = [paths.script_path]
 
     for dirpath in dirs:
         if not os.path.isdir(dirpath):
@@ -253,13 +264,24 @@ def load_scripts():
                 continue
 
             if issubclass(script_class, Script):
-                scripts_data.append(ScriptClassData(script_class, scriptfile.path, scriptfile.basedir, module))
+                scripts_data.append(
+                    ScriptClassData(
+                        script_class, scriptfile.path, scriptfile.basedir, module
+                    )
+                )
             elif issubclass(script_class, scripts_postprocessing.ScriptPostprocessing):
-                postprocessing_scripts_data.append(ScriptClassData(script_class, scriptfile.path, scriptfile.basedir, module))
+                postprocessing_scripts_data.append(
+                    ScriptClassData(
+                        script_class, scriptfile.path, scriptfile.basedir, module
+                    )
+                )
 
     def orderby(basedir):
         # 1st webui, 2nd extensions-builtin, 3rd extensions
-        priority = {os.path.join(paths.script_path, "extensions-builtin"):1, paths.script_path:0}
+        priority = {
+            os.path.join(paths.script_path, "extensions-builtin"): 1,
+            paths.script_path: 0,
+        }
         for key in priority:
             if basedir.startswith(key):
                 return priority[key]
@@ -315,7 +337,9 @@ class ScriptRunner:
         self.alwayson_scripts.clear()
         self.selectable_scripts.clear()
 
-        auto_processing_scripts = scripts_auto_postprocessing.create_auto_preprocessing_script_data()
+        auto_processing_scripts = (
+            scripts_auto_postprocessing.create_auto_preprocessing_script_data()
+        )
 
         for script_data in auto_processing_scripts + scripts_data:
             script = script_data.script_class()
@@ -334,125 +358,18 @@ class ScriptRunner:
                 self.scripts.append(script)
                 self.selectable_scripts.append(script)
 
-    def create_script_ui(self, script):
-        import modules.api.models as api_models
-
-        script.args_from = len(self.inputs)
-        script.args_to = len(self.inputs)
-
-        controls = wrap_call(script.ui, script.filename, "ui", script.is_img2img)
-
-        if controls is None:
-            return
-
-        script.name = wrap_call(script.title, script.filename, "title", default=script.filename).lower()
-        api_args = []
-
-        for control in controls:
-            control.custom_script_source = os.path.basename(script.filename)
-
-            arg_info = api_models.ScriptArg(label=control.label or "")
-
-            for field in ("value", "minimum", "maximum", "step", "choices"):
-                v = getattr(control, field, None)
-                if v is not None:
-                    setattr(arg_info, field, v)
-
-            api_args.append(arg_info)
-
-        script.api_info = api_models.ScriptInfo(
-            name=script.name,
-            is_img2img=script.is_img2img,
-            is_alwayson=script.alwayson,
-            args=api_args,
-        )
-
-        if script.infotext_fields is not None:
-            self.infotext_fields += script.infotext_fields
-
-        if script.paste_field_names is not None:
-            self.paste_field_names += script.paste_field_names
-
-        self.inputs += controls
-        script.args_to = len(self.inputs)
-
-    def setup_ui_for_section(self, section, scriptlist=None):
-        if scriptlist is None:
-            scriptlist = self.alwayson_scripts
-
-        for script in scriptlist:
-            if script.alwayson and script.section != section:
-                continue
-
-            with gr.Group(visible=script.alwayson) as group:
-                self.create_script_ui(script)
-
-            script.group = group
-
-    def prepare_ui(self):
-        self.inputs = [None]
-
-    def setup_ui(self):
-        self.titles = [wrap_call(script.title, script.filename, "title") or f"{script.filename} [error]" for script in self.selectable_scripts]
-
-        self.setup_ui_for_section(None)
-
-        dropdown = gr.Dropdown(label="Script", elem_id="script_list", choices=["None"] + self.titles, value="None", type="index")
-        self.inputs[0] = dropdown
-
-        self.setup_ui_for_section(None, self.selectable_scripts)
-
-        def select_script(script_index):
-            selected_script = self.selectable_scripts[script_index - 1] if script_index>0 else None
-
-            return [gr.update(visible=selected_script == s) for s in self.selectable_scripts]
-
-        def init_field(title):
-            """called when an initial value is set from ui-config.json to show script's UI components"""
-
-            if title == 'None':
-                return
-
-            script_index = self.titles.index(title)
-            self.selectable_scripts[script_index].group.visible = True
-
-        dropdown.init_field = init_field
-
-        dropdown.change(
-            fn=select_script,
-            inputs=[dropdown],
-            outputs=[script.group for script in self.selectable_scripts]
-        )
-
-        self.script_load_ctr = 0
-
-        def onload_script_visibility(params):
-            title = params.get('Script', None)
-            if title:
-                title_index = self.titles.index(title)
-                visibility = title_index == self.script_load_ctr
-                self.script_load_ctr = (self.script_load_ctr + 1) % len(self.titles)
-                return gr.update(visible=visibility)
-            else:
-                return gr.update(visible=False)
-
-        self.infotext_fields.append((dropdown, lambda x: gr.update(value=x.get('Script', 'None'))))
-        self.infotext_fields.extend([(script.group, onload_script_visibility) for script in self.selectable_scripts])
-
-        return self.inputs
-
     def run(self, p, *args):
         script_index = args[0]
 
         if script_index == 0:
             return None
 
-        script = self.selectable_scripts[script_index-1]
+        script = self.selectable_scripts[script_index - 1]
 
         if script is None:
             return None
 
-        script_args = args[script.args_from:script.args_to]
+        script_args = args[script.args_from : script.args_to]
         processed = script.run(p, *script_args)
 
         shared.total_tqdm.clear()
@@ -462,72 +379,91 @@ class ScriptRunner:
     def before_process(self, p):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.before_process(p, *script_args)
             except Exception:
-                errors.report(f"Error running before_process: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running before_process: {script.filename}", exc_info=True
+                )
 
     def process(self, p):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.process(p, *script_args)
             except Exception:
-                errors.report(f"Error running process: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running process: {script.filename}", exc_info=True
+                )
 
     def before_process_batch(self, p, **kwargs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.before_process_batch(p, *script_args, **kwargs)
             except Exception:
-                errors.report(f"Error running before_process_batch: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running before_process_batch: {script.filename}",
+                    exc_info=True,
+                )
 
     def process_batch(self, p, **kwargs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.process_batch(p, *script_args, **kwargs)
             except Exception:
-                errors.report(f"Error running process_batch: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running process_batch: {script.filename}", exc_info=True
+                )
 
     def postprocess(self, p, processed):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.postprocess(p, processed, *script_args)
             except Exception:
-                errors.report(f"Error running postprocess: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running postprocess: {script.filename}", exc_info=True
+                )
 
     def postprocess_batch(self, p, images, **kwargs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.postprocess_batch(p, *script_args, images=images, **kwargs)
             except Exception:
-                errors.report(f"Error running postprocess_batch: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running postprocess_batch: {script.filename}", exc_info=True
+                )
 
     def postprocess_image(self, p, pp: PostprocessImageArgs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.postprocess_image(p, pp, *script_args)
             except Exception:
-                errors.report(f"Error running postprocess_image: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running postprocess_image: {script.filename}", exc_info=True
+                )
 
     def before_component(self, component, **kwargs):
         for script in self.scripts:
             try:
                 script.before_component(component, **kwargs)
             except Exception:
-                errors.report(f"Error running before_component: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running before_component: {script.filename}", exc_info=True
+                )
 
     def after_component(self, component, **kwargs):
         for script in self.scripts:
             try:
                 script.after_component(component, **kwargs)
             except Exception:
-                errors.report(f"Error running after_component: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running after_component: {script.filename}", exc_info=True
+                )
 
     def reload_sources(self, cache):
         for si, script in list(enumerate(self.scripts)):
@@ -561,49 +497,3 @@ def reload_script_body_only():
 
 
 reload_scripts = load_scripts  # compatibility alias
-
-
-def add_classes_to_gradio_component(comp):
-    """
-    this adds gradio-* to the component for css styling (ie gradio-button to gr.Button), as well as some others
-    """
-
-    comp.elem_classes = [f"gradio-{comp.get_block_name()}", *(comp.elem_classes or [])]
-
-    if getattr(comp, 'multiselect', False):
-        comp.elem_classes.append('multiselect')
-
-
-
-def IOComponent_init(self, *args, **kwargs):
-    if scripts_current is not None:
-        scripts_current.before_component(self, **kwargs)
-
-    script_callbacks.before_component_callback(self, **kwargs)
-
-    res = original_IOComponent_init(self, *args, **kwargs)
-
-    add_classes_to_gradio_component(self)
-
-    script_callbacks.after_component_callback(self, **kwargs)
-
-    if scripts_current is not None:
-        scripts_current.after_component(self, **kwargs)
-
-    return res
-
-
-original_IOComponent_init = gr.components.IOComponent.__init__
-gr.components.IOComponent.__init__ = IOComponent_init
-
-
-def BlockContext_init(self, *args, **kwargs):
-    res = original_BlockContext_init(self, *args, **kwargs)
-
-    add_classes_to_gradio_component(self)
-
-    return res
-
-
-original_BlockContext_init = gr.blocks.BlockContext.__init__
-gr.blocks.BlockContext.__init__ = BlockContext_init
