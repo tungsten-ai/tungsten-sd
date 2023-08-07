@@ -11,6 +11,7 @@ from modules import (
     scripts_postprocessing,
     shared,
     timer,
+    extensions,
 )
 
 AlwaysVisible = object()
@@ -222,6 +223,10 @@ def list_scripts(scriptdirname, extension):
             scripts_list.append(
                 ScriptFile(paths.script_path, filename, os.path.join(basedir, filename))
             )
+
+
+    for ext in extensions.active():
+        scripts_list += ext.list_files(scriptdirname, extension)
 
     scripts_list = [
         x

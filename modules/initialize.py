@@ -20,12 +20,14 @@ def initialize():
             import modules.sd_models
             import modules.sd_unet
             import modules.sd_vae
+            import modules.extensions
             from modules import modelloader, sd_samplers
 
             modelloader.cleanup_models()
             modules.sd_models.setup_model()
             sd_samplers.set_samplers()
             modules.sd_models.list_models()
+            modules.extensions.list_extensions()
             modules.scripts.load_scripts()
             modules.sd_vae.refresh_vae_list()
             modules.script_callbacks.on_list_optimizers(
