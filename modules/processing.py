@@ -32,7 +32,7 @@ from modules import (
     sd_vae_approx,
 )
 from modules.sd_hijack import model_hijack
-from modules.shared import opts, state
+from modules.shared import opts, state, cmd_opts
 
 # some of those options should not be changed at all because they would break the model, so I removed them from options.
 opt_C = 4
@@ -774,6 +774,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         p.all_subseeds = subseed
     else:
         p.all_subseeds = [int(subseed) + x for x in range(len(p.all_prompts))]
+
+    if os.path.exists(cmd_opts.embeddings_dir) and not p.do_not_reload_embeddings:
+        model_hijack.embedding_db.load_textual_inversion_embeddings()
 
     if p.scripts is not None:
         p.scripts.process(p)

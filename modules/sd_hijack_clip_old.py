@@ -29,7 +29,7 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
             while i < len(tokens):
                 token = tokens[i]
 
-                embedding, embedding_length_in_tokens = None, None
+                embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, i)
 
                 mult_change = (
                     self.token_mults.get(token) if shared.opts.enable_emphasis else None

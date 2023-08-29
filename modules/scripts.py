@@ -345,7 +345,6 @@ class ScriptRunner:
         auto_processing_scripts = (
             scripts_auto_postprocessing.create_auto_preprocessing_script_data()
         )
-
         for script_data in auto_processing_scripts + scripts_data:
             script = script_data.script_class()
             script.filename = script_data.path

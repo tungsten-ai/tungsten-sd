@@ -1,24 +1,58 @@
 import random
-from typing import List
+from glob import glob
+from typing import List, Optional, Tuple, Union
 
 from tungstenkit import BaseIO, Field, Image, Option, define_model
 
 from modules.initialize import initialize
+from modules.sd_vae import load_vae
 from modules.txt2img import txt2img
+
+VAE_FILE_PATHS = glob("models/VAE/*")
+
 
 class Input(BaseIO):
     prompt: str = Field(description="Input prompt")
+    reference_image: Optional[Image] = Option(
+        description="Image with a reference architecture shape",
+        default=None,
+    )
     negative_prompt: str = Option(
         description="Specify things to not see in the output",
         default="",
     )
     image_dimensions: str = Option(
-        default="512x768",
+        default="768x512",
         description="Pixel dimensions of output image (width x height)",
-        choices=["512x512", "512x768", "768x512"],
+        choices=[
+            "512x512",
+            "512x768",
+            "768x512",
+            "1024x1024",
+            "1024x1536",
+            "1536x1024",
+            "1536x1536",
+            "1536x2304",
+            "2304x1536",
+            "2048x2048",
+            "2048x3072",
+            "3072x2048",
+        ],
+    )
+    num_outputs: int = Option(
+        description="Number of output images",
+        le=8,
+        ge=1,
+        default=1,
+    )
+    seed: int = Option(
+        description="Random seed. Set as -1 to randomize the seed",
+        default=-1,
+        ge=-1,
+        le=4294967293,
     )
     sampler: str = Option(
-        default="Euler a",
+        default="DPM++ SDE Karras",
         choices=[
             "Euler a",
             "Euler",
@@ -46,23 +80,14 @@ class Input(BaseIO):
         description="Sampler type",
     )
     samping_steps: int = Option(
-        description="Number of denoising steps", ge=1, le=500, default=50
+        description="Number of denoising steps", ge=1, le=100, default=20
     )
     cfg_scale: float = Option(
-        description="Scale for classifier-free guidance", ge=1, le=20, default=7.5
-    )
-    num_outputs: int = Option(
-        description="Number of output images",
-        le=8,
-        ge=1,
-        default=1,
-    )
-    seed: int = Option(
-        description="Random seed. Set as -1 to randomize the seed", default=-1, ge=-1
+        description="Scale for classifier-free guidance", ge=1, le=20, default=7
     )
     clip_skip: bool = Option(
         description="Whether to ignore the last layer of CLIP network or not",
-        default=False,
+        default=True,
     )
 
 
@@ -74,14 +99,14 @@ class Output(BaseIO):
     input=Input,
     output=Output,
     batch_size=1,
-    gpu_mem_gb=14,
     gpu=True,
+    gpu_mem_gb=14,
     system_packages=["python3-opencv"],
     python_packages=[
         "torch==2.0.1",
         "torchvision==0.15.2",
         "clip @ git+https://github.com/openai/CLIP.git@d50d76daa670286dd6cacf3bcd80b5e4823fc8e1",
-        "open-clip-torch @ git+https://github.com/mlfoundations/open_clip.git@bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b",
+        "open-clip-torch @ git+https://github.com/mlfoundations/open_clip.git@bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b",  # noqa: E501
         "realesrgan==0.3.0",
         "pytorch-lightning==1.9.4",
         "transformers==4.25.1",
@@ -112,26 +137,33 @@ class Output(BaseIO):
     include_files=[
         "configs",
         "extensions-builtin",
+        "extensions",
         "localizations",
         "models",
         "modules",
         "repositories",
+        "embeddings",
     ],
 )
 class StableDiffusion:
     def setup(self):
         initialize()
+        if VAE_FILE_PATHS:
+            load_vae(VAE_FILE_PATHS[0])
 
     def predict(self, inputs: List[Input]) -> List[Output]:
         input = inputs[0]
 
+        # Output image size
         width, height = [int(d) for d in input.image_dimensions.split("x")]
 
+        # Assign random seed
         if input.seed == -1:
             input.seed = random.randrange(4294967294)
             print(f"Using seed {input.seed}\n")
 
-        processed = txt2img(
+        # Generate image
+        images = txt2img(
             prompt=input.prompt,
             negative_prompt=input.negative_prompt,
             seed=float(input.seed),
@@ -142,6 +174,53 @@ class StableDiffusion:
             width=width,
             height=height,
             clip_skip=input.clip_skip,
+            loras=self.get_loras(input),
+            default_positive_prompt_chunks=self.get_extra_prompt_chunks(input),
+            default_negative_prompt_chunks=self.get_extra_negative_prompt_chunks(input),
+            controlnet_pose_image=input.reference_image,
+            controlnet_depth_image=input.reference_image,
         )
-        images = [Image.from_pil_image(pil_img) for pil_img in processed.images]
+
         return [Output(images=images)]
+
+    def get_loras(self, input: Input) -> List[Tuple[str, float]]:
+        """
+        Declare LoRAs to use in the format of (LORA_FILE_NAME, WEIGHT).
+
+        The LoRA weight file named LORA_FILE_NAME should exist in `models/LoRA` directory.
+
+        Examples:
+          - `[("add_detail", 0.5)]` -> Put `<lora:add_detail:0.5>` to the prompt.
+          - `[("add_detail", input.detail)]` -> Put `<lora:add_detail:{detail field in input}>` to the prompt. # noqa: E501
+        """
+
+        return []
+
+    def get_extra_prompt_chunks(
+        self, input: Input
+    ) -> List[Union[str, Tuple[str, float]]]:
+        """
+        Declare default prompt chunks.
+
+        Using this, you can use textual inversion.
+
+        Examples
+          - `["hello"]` -> Put `hello` to the prompt (w/ whitespace if required).
+          - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the prompt.
+        """
+
+        return []
+
+    def get_extra_negative_prompt_chunks(
+        self, input: Input
+    ) -> List[Union[str, Tuple[str, float]]]:
+        """
+        Declare default negative prompt chunks.
+
+        Using this, you can use textual inversion.
+
+        Examples
+          - `["hello"]` -> Put `hello` to the negative prompt (w/ whitespace if required).
+          - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the negative prompt.
+        """
+        return []

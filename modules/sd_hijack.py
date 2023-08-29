@@ -22,6 +22,7 @@ from modules import (
     shared,
     xlmr,
 )
+import modules.textual_inversion.textual_inversion
 from modules.shared import cmd_opts
 
 attention_CrossAttention_forward = ldm.modules.attention.CrossAttention.forward
@@ -185,10 +186,10 @@ class StableDiffusionModelHijack:
     clip = None
     optimization_method = None
 
-    # embedding_db = modules.textual_inversion.textual_inversion.EmbeddingDatabase()
+    embedding_db = modules.textual_inversion.textual_inversion.EmbeddingDatabase()
 
-    # def __init__(self):
-    #     self.embedding_db.add_embedding_dir(cmd_opts.embeddings_dir)
+    def __init__(self):
+        self.embedding_db.add_embedding_dir(cmd_opts.embeddings_dir)
 
     def apply_optimizations(self, option=None):
         try:

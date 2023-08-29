@@ -4,3 +4,6 @@
 [submodule "repositories/k-diffusion"]
 	path = repositories/k-diffusion
 	url = https://github.com/crowsonkb/k-diffusion
+[submodule "extensions/sd-webui-controlnet"]
+	path = extensions/sd-webui-controlnet
+	url = https://github.com/Mikubill/sd-webui-controlnet
