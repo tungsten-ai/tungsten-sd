@@ -116,12 +116,12 @@ class BaseSDInput(BaseIO):
 
 class SDInput(BaseSDInput):
     reference_image: Optional[Image] = Option(
-        description="Image with a reference architecture shape",
+        description="Image with a reference pose and shape",
         default=None,
     )
 
 
-SDXLInput = SDInput
+SDXLInput = BaseSDInput
 
 
 class Output(BaseIO):
