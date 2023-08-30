@@ -179,6 +179,7 @@ class Output(BaseIO):
         "embeddings",
         "check_if_sdxl.py",
     ],
+    exclude_files=["models/ControlNet"] if IS_SDXL else [],
 )
 class StableDiffusion:
     def setup(self):
