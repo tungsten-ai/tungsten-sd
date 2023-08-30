@@ -139,7 +139,7 @@ class Output(BaseIO):
         "torch==2.0.1",
         "torchvision==0.15.2",
         "clip @ git+https://github.com/openai/CLIP.git@d50d76daa670286dd6cacf3bcd80b5e4823fc8e1",
-        "open-clip-torch @ git+https://github.com/mlfoundations/open_clip.git@bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b",  # noqa: E501
+        "open-clip-torch==2.20.0",
         "realesrgan==0.3.0",
         "pytorch-lightning==1.9.4",
         "transformers==4.25.1",
@@ -230,7 +230,7 @@ class StableDiffusion:
           - `[("add_detail", input.detail)]` -> Put `<lora:add_detail:{detail field in input}>` to the prompt. # noqa: E501
         """
 
-        return []
+        return [("pixel-art-xl", 1.0)]
 
     def get_extra_prompt_chunks(
         self, input: BaseSDInput

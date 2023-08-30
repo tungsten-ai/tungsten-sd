@@ -108,3 +108,5 @@ def initialize(vae_file_path, *, is_sdxl):
 
     if vae_file_path:
         load_vae(vae_file_path)
+
+    modules.script_callbacks.before_ui_callback()
