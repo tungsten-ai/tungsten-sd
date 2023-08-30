@@ -584,7 +584,7 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
 
     timer.record("load config")
 
-    # print(f"Creating model from config: {checkpoint_config}")
+    print(f"Creating model from config: {checkpoint_config}")
 
     sd_model = None
     try:

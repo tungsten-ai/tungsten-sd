@@ -13,7 +13,6 @@ import sgm.modules.encoders.modules
 import torch
 from torch.nn.functional import silu
 
-import modules.textual_inversion.textual_inversion
 from modules import (
     devices,
     errors,
@@ -29,6 +28,7 @@ from modules import (
 )
 from modules.hypernetworks import hypernetwork
 from modules.shared import cmd_opts
+from modules.textual_inversion import textual_inversion
 
 attention_CrossAttention_forward = ldm.modules.attention.CrossAttention.forward
 diffusionmodules_model_nonlinearity = ldm.modules.diffusionmodules.model.nonlinearity
@@ -203,7 +203,7 @@ class StableDiffusionModelHijack:
     clip = None
     optimization_method = None
 
-    embedding_db = modules.textual_inversion.textual_inversion.EmbeddingDatabase()
+    embedding_db = textual_inversion.EmbeddingDatabase()
 
     def __init__(self):
         self.extra_generation_params = {}

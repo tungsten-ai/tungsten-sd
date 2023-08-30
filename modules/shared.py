@@ -42,7 +42,6 @@ class DummyModule:
 
 def list_extensions(settings_file):
     settings = {}
-    print(settings_file)
     try:
         if os.path.isfile(settings_file):
             with open(settings_file, "r", encoding="utf8") as file:
@@ -70,20 +69,15 @@ demo = None
 parser = cmd_args.parser
 
 
+cmd_opts, _ = parser.parse_known_args()
 script_loading.preload_extensions(
     extensions_dir,
     parser,
-    extension_list=list_extensions(
-        cmd_args.parser.parse_known_args()[0].ui_settings_file
-    ),
+    extension_list=list_extensions(cmd_opts.ui_settings_file),
 )
 script_loading.preload_extensions(extensions_builtin_dir, parser)
 
-if os.environ.get("IGNORE_CMD_ARGS_ERRORS", None) is None:
-    cmd_opts = parser.parse_args()
-else:
-    cmd_opts, _ = parser.parse_known_args()
-
+cmd_opts, _ = parser.parse_known_args()
 
 restricted_opts = {
     "samples_filename_pattern",

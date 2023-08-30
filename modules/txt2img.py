@@ -4,16 +4,20 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 from tungstenkit import Image
 
-from modules import prompt_utils, scripts, shared
-from modules.processing import StableDiffusionProcessingTxt2Img, process_images
-from modules.realesrgan_model import UpscalerRealESRGAN
-
-GENERATED_IMG_SIZES = [512, 768]
-SCALE_FACTORS = range(1, 5)
-AVAILABLE_IMG_SIZES = [
+SD_GENERATED_IMG_SIZES = [512, 768]
+SD_SCALE_FACTORS = range(1, 5)
+SD_AVAILABLE_IMG_SIZES = [
     size * scale_factor
-    for size in GENERATED_IMG_SIZES
-    for scale_factor in SCALE_FACTORS
+    for size in SD_GENERATED_IMG_SIZES
+    for scale_factor in SD_SCALE_FACTORS
+]
+
+SDXL_GENERATED_IMG_SIZES = [640, 768, 832, 896, 1024, 1152, 1216, 1344, 1536]
+SDXL_SCALE_FACTORS = range(3)
+SDXL_AVAILABLE_IMG_SIZES = [
+    size * scale_factor
+    for size in SDXL_GENERATED_IMG_SIZES
+    for scale_factor in SDXL_SCALE_FACTORS
 ]
 
 upscaler = None
@@ -40,6 +44,10 @@ def txt2img(
         List[Union[str, Tuple[str, float]]]
     ] = None,
 ) -> List[Image]:
+    from modules import prompt_utils, scripts, shared
+    from modules.processing import StableDiffusionProcessingTxt2Img, process_images
+    from modules.realesrgan_model import UpscalerRealESRGAN
+
     global upscaler
 
     use_controlnet = bool(controlnet_pose_image or controlnet_depth_image)
@@ -82,7 +90,7 @@ def txt2img(
 
     # Upscaler config
     (gen_width, gen_height), scale_factor = _get_generated_image_size_and_scale_factor(
-        width, height
+        shared.sd_model, width, height
     )
 
     # Prepare processing
@@ -202,20 +210,25 @@ def txt2img(
     return images
 
 
-def _get_generated_image_size_and_scale_factor(desired_width: int, desired_height: int):
+def _get_generated_image_size_and_scale_factor(
+    model, desired_width: int, desired_height: int
+):
+    available_img_sizes = _get_available_img_sizes(model.is_sdxl)
+    generated_img_sizes = _get_possible_generated_img_sizes(model.is_sdxl)
+
     assert (
-        desired_height in AVAILABLE_IMG_SIZES
-    ), f"Invalid image height. Available heights: {AVAILABLE_IMG_SIZES}"
+        desired_height in available_img_sizes
+    ), f"Invalid image height. Available heights: {available_img_sizes}"
     assert (
-        desired_width in AVAILABLE_IMG_SIZES
-    ), f"Invalid image width. Available widths: {AVAILABLE_IMG_SIZES}"
+        desired_width in available_img_sizes
+    ), f"Invalid image width. Available widths: {available_img_sizes}"
     scale_factor, width, height = 1, desired_width, desired_height
     if (
-        desired_width not in GENERATED_IMG_SIZES
-        or desired_height not in GENERATED_IMG_SIZES
+        desired_width not in generated_img_sizes
+        or desired_height not in generated_img_sizes
     ):
         for _width, _height in itertools.product(
-            GENERATED_IMG_SIZES, GENERATED_IMG_SIZES
+            generated_img_sizes, generated_img_sizes
         ):
             if (
                 desired_width % _width == 0
@@ -227,3 +240,11 @@ def _get_generated_image_size_and_scale_factor(desired_width: int, desired_heigh
                 height = _height
                 break
     return (width, height), scale_factor
+
+
+def _get_available_img_sizes(is_sdxl: bool):
+    return SDXL_AVAILABLE_IMG_SIZES if is_sdxl else SD_AVAILABLE_IMG_SIZES
+
+
+def _get_possible_generated_img_sizes(is_sdxl: bool):
+    return SDXL_GENERATED_IMG_SIZES if is_sdxl else SD_GENERATED_IMG_SIZES

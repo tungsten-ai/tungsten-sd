@@ -26,6 +26,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 *.pt
+*.pth
+*.safetensors
+!models/model.pt
+!models/VAE-approx/vaeapprox-sdxl.pt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

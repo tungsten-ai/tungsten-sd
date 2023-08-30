@@ -4,40 +4,63 @@ from typing import List, Optional, Tuple, Union
 
 from tungstenkit import BaseIO, Field, Image, Option, define_model
 
+from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize
-from modules.sd_vae import load_vae
 from modules.txt2img import txt2img
 
 VAE_FILE_PATHS = glob("models/VAE/*")
+MODEL_FILES = glob("models/Stable-diffusion/*.safetensors")
+assert len(MODEL_FILES) > 0, "Stable diffusion checkpoint not found"
+IS_SDXL = check_if_sdxl(MODEL_FILES[0])
 
 
-class Input(BaseIO):
+SD_OUTPUT_DIMS = [
+    "512x512",
+    "512x768",
+    "768x512",
+    "1024x1024",
+    "1024x1536",
+    "1536x1024",
+    "1536x1536",
+    "1536x2304",
+    "2304x1536",
+    "2048x2048",
+    "2048x3072",
+    "3072x2048",
+]
+SDXL_OUTPUT_DIMS = [
+    "1024x1024",
+    "1152x896",
+    "896x1152",
+    "1216x832",
+    "832x1216",
+    "1344x768",
+    "768x1344",
+    "1536x640",
+    "640x1536",
+    "2048x2048",
+    "2304x1792",
+    "1792x2304",
+    "2432x1664",
+    "1664x2432",
+    "2688x1536",
+    "1536x2688",
+    "3072x1280",
+    "1280x3072",
+]
+
+
+class BaseSDInput(BaseIO):
     prompt: str = Field(description="Input prompt")
-    reference_image: Optional[Image] = Option(
-        description="Image with a reference architecture shape",
-        default=None,
-    )
+
     negative_prompt: str = Option(
         description="Specify things to not see in the output",
         default="",
     )
     image_dimensions: str = Option(
-        default="512x768",
+        default=SDXL_OUTPUT_DIMS[0] if IS_SDXL else SD_OUTPUT_DIMS[0],
         description="Pixel dimensions of output image (width x height)",
-        choices=[
-            "512x512",
-            "512x768",
-            "768x512",
-            "1024x1024",
-            "1024x1536",
-            "1536x1024",
-            "1536x1536",
-            "1536x2304",
-            "2304x1536",
-            "2048x2048",
-            "2048x3072",
-            "3072x2048",
-        ],
+        choices=SDXL_OUTPUT_DIMS if IS_SDXL else SD_OUTPUT_DIMS,
     )
     num_outputs: int = Option(
         description="Number of output images",
@@ -91,12 +114,22 @@ class Input(BaseIO):
     )
 
 
+class SDInput(BaseSDInput):
+    reference_image: Optional[Image] = Option(
+        description="Image with a reference architecture shape",
+        default=None,
+    )
+
+
+SDXLInput = SDInput
+
+
 class Output(BaseIO):
     images: List[Image]
 
 
 @define_model(
-    input=Input,
+    input=SDXLInput if IS_SDXL else SDInput,
     output=Output,
     batch_size=1,
     gpu=True,
@@ -132,6 +165,7 @@ class Output(BaseIO):
         "lark==1.1.5",
         "tqdm==4.65.0",
         "clean-fid==0.1.35",
+        "xformers==0.0.21",
     ],
     python_version="3.10",
     include_files=[
@@ -143,15 +177,16 @@ class Output(BaseIO):
         "modules",
         "repositories",
         "embeddings",
+        "check_if_sdxl.py",
     ],
 )
 class StableDiffusion:
     def setup(self):
-        initialize()
-        if VAE_FILE_PATHS:
-            load_vae(VAE_FILE_PATHS[0])
+        initialize(
+            vae_file_path=VAE_FILE_PATHS[0] if VAE_FILE_PATHS else None, is_sdxl=IS_SDXL
+        )
 
-    def predict(self, inputs: List[Input]) -> List[Output]:
+    def predict(self, inputs: List[BaseSDInput]) -> List[Output]:
         input = inputs[0]
 
         # Output image size
@@ -177,13 +212,13 @@ class StableDiffusion:
             loras=self.get_loras(input),
             default_positive_prompt_chunks=self.get_extra_prompt_chunks(input),
             default_negative_prompt_chunks=self.get_extra_negative_prompt_chunks(input),
-            controlnet_pose_image=input.reference_image,
-            controlnet_depth_image=input.reference_image,
+            controlnet_pose_image=None if IS_SDXL else input.reference_image,
+            controlnet_depth_image=None if IS_SDXL else input.reference_image,
         )
 
         return [Output(images=images)]
 
-    def get_loras(self, input: Input) -> List[Tuple[str, float]]:
+    def get_loras(self, input: BaseSDInput) -> List[Tuple[str, float]]:
         """
         Declare LoRAs to use in the format of (LORA_FILE_NAME, WEIGHT).
 
@@ -197,7 +232,7 @@ class StableDiffusion:
         return []
 
     def get_extra_prompt_chunks(
-        self, input: Input
+        self, input: BaseSDInput
     ) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare default prompt chunks.
@@ -212,7 +247,7 @@ class StableDiffusion:
         return []
 
     def get_extra_negative_prompt_chunks(
-        self, input: Input
+        self, input: BaseSDInput
     ) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare default negative prompt chunks.
@@ -224,11 +259,3 @@ class StableDiffusion:
           - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the negative prompt.
         """
         return []
-
-
-if __name__ == "__main__":
-    inp = Input(prompt="hello")
-    model = StableDiffusion()
-    model.setup()
-    outputs = model.predict([inp])
-    print(outputs[0].images[0].path)
