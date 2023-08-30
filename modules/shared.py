@@ -1,10 +1,12 @@
 import datetime
 import json
+import logging
 import os
+import re
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 import tqdm
@@ -13,9 +15,9 @@ from ldm.models.diffusion.ddpm import LatentDiffusion
 import modules.devices as devices
 import modules.memmon
 import modules.styles
-from modules import cmd_args, errors, script_loading
+from modules import cmd_args, errors, script_loading, shared_items
+from modules.paths_internal import data_path  # noqa: F401
 from modules.paths_internal import (
-    data_path,
     default_sd_model_file,
     extensions_builtin_dir,
     extensions_dir,
@@ -26,19 +28,62 @@ from modules.paths_internal import (
     sd_model_file,
 )
 
+
+class DummyModule:
+    def __getattribute__(self, __name: str) -> Any:
+        return DummyModule()
+
+    def __setattr__(self, __name: str, __value: Any) -> None:
+        return None
+
+    def __call__(self, *args, **argv) -> None:
+        return None
+
+
+def list_extensions(settings_file):
+    settings = {}
+    print(settings_file)
+    try:
+        if os.path.isfile(settings_file):
+            with open(settings_file, "r", encoding="utf8") as file:
+                settings = json.load(file)
+    except Exception:
+        errors.report("Could not load settings", exc_info=True)
+
+    disabled_extensions = set(settings.get("disabled_extensions", []))
+    disable_all_extensions = settings.get("disable_all_extensions", "none")
+
+    if disable_all_extensions != "none":
+        return []
+
+    return [x for x in os.listdir(extensions_dir) if x not in disabled_extensions]
+
+
+gr = DummyModule()
+ui_components = DummyModule()
+
+
+log = logging.getLogger(__name__)
+
 demo = None
 
 parser = cmd_args.parser
 
-script_loading.preload_extensions(extensions_dir, parser)
+
+script_loading.preload_extensions(
+    extensions_dir,
+    parser,
+    extension_list=list_extensions(
+        cmd_args.parser.parse_known_args()[0].ui_settings_file
+    ),
+)
 script_loading.preload_extensions(extensions_builtin_dir, parser)
 
-# if os.environ.get("IGNORE_CMD_ARGS_ERRORS", None) is None:
-#     cmd_opts = parser.parse_args()
-# else:
-#     cmd_opts, _ = parser.parse_known_args()
+if os.environ.get("IGNORE_CMD_ARGS_ERRORS", None) is None:
+    cmd_opts = parser.parse_args()
+else:
+    cmd_opts, _ = parser.parse_known_args()
 
-cmd_opts, _ = parser.parse_known_args()
 
 restricted_opts = {
     "samples_filename_pattern",
@@ -53,6 +98,20 @@ restricted_opts = {
     "outdir_init_images",
 }
 
+# https://huggingface.co/datasets/freddyaboulton/gradio-theme-subdomains/resolve/main/subdomains.json
+gradio_hf_hub_themes = [
+    "gradio/glass",
+    "gradio/monochrome",
+    "gradio/seafoam",
+    "gradio/soft",
+    "freddyaboulton/dracula_revamped",
+    "gradio/dracula_test",
+    "abidlabs/dracula_test",
+    "abidlabs/pakistan",
+    "dawood/microsoft_windows",
+    "ysharma/steampunk",
+]
+
 
 cmd_opts.disable_extension_access = (
     cmd_opts.share or cmd_opts.listen or cmd_opts.server_name
@@ -61,12 +120,14 @@ cmd_opts.disable_extension_access = (
 (
     devices.device,
     devices.device_interrogate,
+    devices.device_gfpgan,
     devices.device_esrgan,
+    devices.device_codeformer,
 ) = (
     devices.cpu
     if any(y in cmd_opts.use_cpu for y in [x, "all"])
     else devices.get_optimal_device()
-    for x in ["sd", "interrogate", "esrgan"]
+    for x in ["sd", "interrogate", "gfpgan", "esrgan", "codeformer"]
 )
 
 devices.dtype = torch.float32 if cmd_opts.no_half else torch.float16
@@ -87,6 +148,14 @@ config_filename = cmd_opts.ui_settings_file
 os.makedirs(cmd_opts.hypernetwork_dir, exist_ok=True)
 hypernetworks = {}
 loaded_hypernetworks = []
+
+
+def reload_hypernetworks():
+    from modules.hypernetworks import hypernetwork
+
+    global hypernetworks
+
+    hypernetworks = hypernetwork.list_hypernetworks(cmd_opts.hypernetwork_dir)
 
 
 class State:
@@ -146,14 +215,20 @@ class State:
     def request_restart(self) -> None:
         self.interrupt()
         self.server_command = "restart"
+        log.info("Received restart request")
 
     def skip(self):
         self.skipped = True
+        log.info("Received skip request")
 
     def interrupt(self):
         self.interrupted = True
+        log.info("Received interrupt request")
 
     def nextjob(self):
+        if opts.live_previews_enable and opts.show_progress_every_n_steps == -1:
+            self.do_set_current_image()
+
         self.job_no += 1
         self.sampling_step = 0
         self.current_image_sampling_step = 0
@@ -172,7 +247,7 @@ class State:
 
         return obj
 
-    def begin(self):
+    def begin(self, job: str = "(unknown)"):
         self.sampling_step = 0
         self.job_count = -1
         self.processing_has_refined_job_count = False
@@ -186,14 +261,47 @@ class State:
         self.interrupted = False
         self.textinfo = None
         self.time_start = time.time()
-
+        self.job = job
         devices.torch_gc()
+        log.info("Starting job %s", job)
 
     def end(self):
+        duration = time.time() - self.time_start
+        log.info("Ending job %s (%.2f seconds)", self.job, duration)
         self.job = ""
         self.job_count = 0
 
         devices.torch_gc()
+
+    def set_current_image(self):
+        """sets self.current_image from self.current_latent if enough sampling steps have been made after the last call to this"""
+        if not parallel_processing_allowed:
+            return
+
+        if (
+            self.sampling_step - self.current_image_sampling_step
+            >= opts.show_progress_every_n_steps
+            and opts.live_previews_enable
+            and opts.show_progress_every_n_steps != -1
+        ):
+            self.do_set_current_image()
+
+    def do_set_current_image(self):
+        if self.current_latent is None:
+            return
+
+        import modules.sd_samplers
+
+        if opts.show_progress_grid:
+            self.assign_current_image(
+                modules.sd_samplers.samples_to_image_grid(self.current_latent)
+            )
+        else:
+            self.assign_current_image(
+                modules.sd_samplers.sample_to_image(self.current_latent)
+            )
+
+        self.current_image_sampling_step = self.sampling_step
 
     def assign_current_image(self, image):
         self.current_image = image
@@ -293,9 +401,14 @@ options_templates.update(
         {
             "samples_save": OptionInfo(True, "Always save all generated images"),
             "samples_format": OptionInfo("png", "File format for images"),
-            "samples_filename_pattern": OptionInfo("", "Images filename pattern"),
+            "samples_filename_pattern": OptionInfo(
+                "", "Images filename pattern", component_args=hide_dirs
+            ).link(
+                "wiki",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Custom-Images-Filename-Name-and-Subdirectory",
+            ),
             "save_images_add_number": OptionInfo(
-                True, "Add number to filename when saving"
+                True, "Add number to filename when saving", component_args=hide_dirs
             ),
             "grid_save": OptionInfo(True, "Always save all generated image grids"),
             "grid_format": OptionInfo("png", "File format for grids"),
@@ -308,10 +421,36 @@ options_templates.update(
             "grid_prevent_empty_spots": OptionInfo(
                 False, "Prevent empty spots in grid (when set to autodetect)"
             ),
-            "grid_zip_filename_pattern": OptionInfo("", "Archive filename pattern"),
+            "grid_zip_filename_pattern": OptionInfo(
+                "", "Archive filename pattern", component_args=hide_dirs
+            ).link(
+                "wiki",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Custom-Images-Filename-Name-and-Subdirectory",
+            ),
             "n_rows": OptionInfo(
                 -1,
                 "Grid row count; use -1 for autodetect and 0 for it to be same as batch size",
+                gr.Slider,
+                {"minimum": -1, "maximum": 16, "step": 1},
+            ),
+            "font": OptionInfo("", "Font for image grids that have text"),
+            "grid_text_active_color": OptionInfo(
+                "#000000",
+                "Text color for image grids",
+                ui_components.FormColorPicker,
+                {},
+            ),
+            "grid_text_inactive_color": OptionInfo(
+                "#999999",
+                "Inactive text color for image grids",
+                ui_components.FormColorPicker,
+                {},
+            ),
+            "grid_background_color": OptionInfo(
+                "#ffffff",
+                "Background color for image grids",
+                ui_components.FormColorPicker,
+                {},
             ),
             "enable_pnginfo": OptionInfo(
                 True,
@@ -337,7 +476,12 @@ options_templates.update(
             "save_mask_composite": OptionInfo(
                 False, "For inpainting, save a masked composite"
             ),
-            "jpeg_quality": OptionInfo(80, "Quality for saved jpeg images"),
+            "jpeg_quality": OptionInfo(
+                80,
+                "Quality for saved jpeg images",
+                gr.Slider,
+                {"minimum": 1, "maximum": 100, "step": 1},
+            ),
             "webp_lossless": OptionInfo(
                 False, "Use lossless compression for webp images"
             ),
@@ -347,12 +491,14 @@ options_templates.update(
                 "if the file size is above the limit, or either width or height are above the limit"
             ),
             "img_downscale_threshold": OptionInfo(
-                4.0, "File size limit for the above option, MB"
+                4.0, "File size limit for the above option, MB", gr.Number
             ),
             "target_side_length": OptionInfo(
-                4000, "Width/height limit for the above option, in pixels"
+                4000, "Width/height limit for the above option, in pixels", gr.Number
             ),
-            "img_max_size_mp": OptionInfo(200, "Maximum image size"),
+            "img_max_size_mp": OptionInfo(200, "Maximum image size", gr.Number).info(
+                "in megapixels"
+            ),
             "use_original_name_batch": OptionInfo(
                 True,
                 "Use original name for output filename during batch process in extras tab",
@@ -365,8 +511,7 @@ options_templates.update(
             ),
             "save_init_img": OptionInfo(False, "Save init images when using img2img"),
             "temp_dir": OptionInfo(
-                "output_images",
-                "Directory for temporary images; leave empty for default",
+                "", "Directory for temporary images; leave empty for default"
             ),
             "clean_temp_dir_at_start": OptionInfo(
                 False, "Cleanup non-default temporary directory when starting webui"
@@ -382,32 +527,47 @@ options_templates.update(
             "outdir_samples": OptionInfo(
                 "",
                 "Output directory for images; if empty, defaults to three directories below",
+                component_args=hide_dirs,
             ),
             "outdir_txt2img_samples": OptionInfo(
-                "outputs/txt2img-images", "Output directory for txt2img images"
+                "outputs/txt2img-images",
+                "Output directory for txt2img images",
+                component_args=hide_dirs,
             ),
             "outdir_img2img_samples": OptionInfo(
-                "outputs/img2img-images", "Output directory for img2img images"
+                "outputs/img2img-images",
+                "Output directory for img2img images",
+                component_args=hide_dirs,
             ),
             "outdir_extras_samples": OptionInfo(
-                "outputs/extras-images", "Output directory for images from extras tab"
+                "outputs/extras-images",
+                "Output directory for images from extras tab",
+                component_args=hide_dirs,
             ),
             "outdir_grids": OptionInfo(
                 "",
                 "Output directory for grids; if empty, defaults to two directories below",
+                component_args=hide_dirs,
             ),
             "outdir_txt2img_grids": OptionInfo(
-                "outputs/txt2img-grids", "Output directory for txt2img grids"
+                "outputs/txt2img-grids",
+                "Output directory for txt2img grids",
+                component_args=hide_dirs,
             ),
             "outdir_img2img_grids": OptionInfo(
-                "outputs/img2img-grids", "Output directory for img2img grids"
+                "outputs/img2img-grids",
+                "Output directory for img2img grids",
+                component_args=hide_dirs,
             ),
             "outdir_save": OptionInfo(
-                "log/images", "Directory for saving images using the Save button"
+                "log/images",
+                "Directory for saving images using the Save button",
+                component_args=hide_dirs,
             ),
             "outdir_init_images": OptionInfo(
                 "outputs/init-images",
                 "Directory for saving init images when using img2img",
+                component_args=hide_dirs,
             ),
         },
     )
@@ -423,10 +583,16 @@ options_templates.update(
                 False, 'When using "Save" button, save images to a subdirectory'
             ),
             "directories_filename_pattern": OptionInfo(
-                "[date]", "Directory name pattern"
+                "[date]", "Directory name pattern", component_args=hide_dirs
+            ).link(
+                "wiki",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Custom-Images-Filename-Name-and-Subdirectory",
             ),
             "directories_max_prompt_words": OptionInfo(
-                8, "Max prompt words for [prompt_words] pattern"
+                8,
+                "Max prompt words for [prompt_words] pattern",
+                gr.Slider,
+                {"minimum": 1, "maximum": 20, "step": 1, **hide_dirs},
             ),
         },
     )
@@ -436,13 +602,30 @@ options_templates.update(
     options_section(
         ("upscaling", "Upscaling"),
         {
-            "ESRGAN_tile": OptionInfo(192, "Tile size for ESRGAN upscalers."),
-            "ESRGAN_tile_overlap": OptionInfo(8, "Tile overlap for ESRGAN upscalers."),
+            "ESRGAN_tile": OptionInfo(
+                192,
+                "Tile size for ESRGAN upscalers.",
+                gr.Slider,
+                {"minimum": 0, "maximum": 512, "step": 16},
+            ).info("0 = no tiling"),
+            "ESRGAN_tile_overlap": OptionInfo(
+                8,
+                "Tile overlap for ESRGAN upscalers.",
+                gr.Slider,
+                {"minimum": 0, "maximum": 48, "step": 1},
+            ).info("Low values = visible seam"),
             "realesrgan_enabled_models": OptionInfo(
                 ["R-ESRGAN 4x+", "R-ESRGAN 4x+ Anime6B"],
                 "Select which Real-ESRGAN models to show in the web UI.",
+                gr.CheckboxGroup,
+                lambda: {"choices": shared_items.realesrgan_models_names()},
             ),
-            "upscaler_for_img2img": OptionInfo(None, "Upscaler for img2img"),
+            "upscaler_for_img2img": OptionInfo(
+                None,
+                "Upscaler for img2img",
+                gr.Dropdown,
+                lambda: {"choices": [x.name for x in sd_upscalers]},
+            ),
         },
     )
 )
@@ -452,9 +635,17 @@ options_templates.update(
         ("face-restoration", "Face restoration"),
         {
             "face_restoration_model": OptionInfo(
-                "CodeFormer", "Face restoration model"
+                "CodeFormer",
+                "Face restoration model",
+                gr.Radio,
+                lambda: {"choices": [x.name() for x in face_restorers]},
             ),
-            "code_former_weight": OptionInfo(0.5, "CodeFormer weight"),
+            "code_former_weight": OptionInfo(
+                0.5,
+                "CodeFormer weight",
+                gr.Slider,
+                {"minimum": 0, "maximum": 1, "step": 0.01},
+            ).info("0 = maximum effect; 1 = minimum effect"),
             "face_restoration_unload": OptionInfo(
                 False, "Move face restoration model from VRAM into RAM after processing"
             ),
@@ -468,8 +659,11 @@ options_templates.update(
         {
             "show_warnings": OptionInfo(False, "Show warnings in console."),
             "memmon_poll_rate": OptionInfo(
-                8, "VRAM usage polls per second during generation."
-            ),
+                8,
+                "VRAM usage polls per second during generation.",
+                gr.Slider,
+                {"minimum": 0, "maximum": 40, "step": 1},
+            ).info("0 = disable"),
             "samples_log_stdout": OptionInfo(
                 False, "Always print all generation info to standard output"
             ),
@@ -483,6 +677,9 @@ options_templates.update(
             "list_hidden_files": OptionInfo(
                 True, "Load models/files in hidden directories"
             ).info('directory is hidden if its name starts with "."'),
+            "disable_mmap_load_safetensors": OptionInfo(
+                False, "Disable memmapping for loading .safetensors files."
+            ).info("fixes very slow loading speed in some cases"),
         },
     )
 )
@@ -511,6 +708,8 @@ options_templates.update(
             "training_image_repeats_per_epoch": OptionInfo(
                 1,
                 "Number of repeats for a single input image per epoch; used only for displaying epoch number",
+                gr.Number,
+                {"precision": 0},
             ),
             "training_write_csv_every": OptionInfo(
                 500,
@@ -537,19 +736,59 @@ options_templates.update(
     options_section(
         ("sd", "Stable Diffusion"),
         {
-            "sd_model_checkpoint": OptionInfo(None, "Stable Diffusion checkpoint"),
-            "sd_checkpoint_cache": OptionInfo(0, "Checkpoints to cache in RAM"),
-            "sd_vae_checkpoint_cache": OptionInfo(0, "VAE Checkpoints to cache in RAM"),
-            "sd_vae": OptionInfo("Automatic", "SD VAE"),
+            "sd_model_checkpoint": OptionInfo(
+                None,
+                "Stable Diffusion checkpoint",
+                gr.Dropdown,
+                lambda: {"choices": list_checkpoint_tiles()},
+                refresh=refresh_checkpoints,
+            ),
+            "sd_checkpoint_cache": OptionInfo(
+                0,
+                "Checkpoints to cache in RAM",
+                gr.Slider,
+                {"minimum": 0, "maximum": 10, "step": 1},
+            ),
+            "sd_vae_checkpoint_cache": OptionInfo(
+                0,
+                "VAE Checkpoints to cache in RAM",
+                gr.Slider,
+                {"minimum": 0, "maximum": 10, "step": 1},
+            ),
+            "sd_vae": OptionInfo(
+                "Automatic",
+                "SD VAE",
+                gr.Dropdown,
+                lambda: {"choices": shared_items.sd_vae_items()},
+                refresh=shared_items.refresh_vae_list,
+            ).info(
+                "choose VAE model: Automatic = use one with same filename as checkpoint; None = use VAE from checkpoint"
+            ),
             "sd_vae_as_default": OptionInfo(
                 True,
                 "Ignore selected VAE for stable diffusion checkpoints that have their own .vae.pt next to them",
             ),
-            "sd_unet": OptionInfo("Automatic", "SD Unet"),
-            "inpainting_mask_weight": OptionInfo(
-                1.0, "Inpainting conditioning mask strength"
+            "sd_unet": OptionInfo(
+                "Automatic",
+                "SD Unet",
+                gr.Dropdown,
+                lambda: {"choices": shared_items.sd_unet_items()},
+                refresh=shared_items.refresh_unet_list,
+            ).info(
+                "choose Unet model: Automatic = use one with same filename as checkpoint; None = use Unet from checkpoint"
             ),
-            "initial_noise_multiplier": OptionInfo(1.0, "Noise multiplier for img2img"),
+            "inpainting_mask_weight": OptionInfo(
+                1.0,
+                "Inpainting conditioning mask strength",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ),
+            "initial_noise_multiplier": OptionInfo(
+                1.0,
+                "Noise multiplier for img2img",
+                gr.Slider,
+                {"minimum": 0.5, "maximum": 1.5, "step": 0.01},
+            ),
             "img2img_color_correction": OptionInfo(
                 False,
                 "Apply color correction to img2img results to match original colors.",
@@ -557,24 +796,72 @@ options_templates.update(
             "img2img_fix_steps": OptionInfo(
                 False,
                 "With img2img, do exactly the amount of steps the slider specifies.",
-            ),
+            ).info("normally you'd do less with less denoising"),
             "img2img_background_color": OptionInfo(
                 "#ffffff",
                 "With img2img, fill image's transparent parts with this color.",
+                ui_components.FormColorPicker,
+                {},
             ),
             "enable_quantization": OptionInfo(
                 False,
                 "Enable quantization in K samplers for sharper and cleaner results. This may change existing seeds. Requires restart to apply.",
             ),
-            "enable_emphasis": OptionInfo(True, "Enable emphasis"),
+            "enable_emphasis": OptionInfo(True, "Enable emphasis").info(
+                "use (text) to make model pay more attention to text and [text] to make it pay less attention"
+            ),
             "enable_batch_seeds": OptionInfo(
                 True,
                 "Make K-diffusion samplers produce same images in a batch as when making a single image",
             ),
-            "comma_padding_backtrack": OptionInfo(20, "Prompt word wrap length limit"),
-            "CLIP_stop_at_last_layers": OptionInfo(1, "Clip skip"),
+            "comma_padding_backtrack": OptionInfo(
+                20,
+                "Prompt word wrap length limit",
+                gr.Slider,
+                {"minimum": 0, "maximum": 74, "step": 1},
+            ).info(
+                "in tokens - for texts shorter than specified, if they don't fit into 75 token limit, move them to the next 75 token chunk"
+            ),
+            "CLIP_stop_at_last_layers": OptionInfo(
+                1, "Clip skip", gr.Slider, {"minimum": 1, "maximum": 12, "step": 1}
+            )
+            .link(
+                "wiki",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#clip-skip",
+            )
+            .info(
+                "ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer"
+            ),
             "upcast_attn": OptionInfo(False, "Upcast cross attention layer to float32"),
-            "randn_source": OptionInfo("GPU", "Random number generator source."),
+            "auto_vae_precision": OptionInfo(
+                True, "Automaticlly revert VAE to 32-bit floats"
+            ).info(
+                "triggers when a tensor with NaNs is produced in VAE; disabling the option in this case will result in a black square image"
+            ),
+            "randn_source": OptionInfo(
+                "GPU",
+                "Random number generator source.",
+                gr.Radio,
+                {"choices": ["GPU", "CPU"]},
+            ).info(
+                "changes seeds drastically; use CPU to produce the same picture across different videocard vendors"
+            ),
+        },
+    )
+)
+
+options_templates.update(
+    options_section(
+        ("sdxl", "Stable Diffusion XL"),
+        {
+            "sdxl_crop_top": OptionInfo(0, "crop top coordinate"),
+            "sdxl_crop_left": OptionInfo(0, "crop left coordinate"),
+            "sdxl_refiner_low_aesthetic_score": OptionInfo(
+                2.5, "SDXL low aesthetic score", gr.Number
+            ).info("used for refiner model negative prompt"),
+            "sdxl_refiner_high_aesthetic_score": OptionInfo(
+                6.0, "SDXL high aesthetic score", gr.Number
+            ).info("used for refiner model prompt"),
         },
     )
 )
@@ -584,22 +871,55 @@ options_templates.update(
         ("optimizations", "Optimizations"),
         {
             "cross_attention_optimization": OptionInfo(
-                "Automatic", "Cross attention optimization"
+                "Automatic",
+                "Cross attention optimization",
+                gr.Dropdown,
+                lambda: {"choices": shared_items.cross_attention_optimizations()},
             ),
-            "s_min_uncond": OptionInfo(0.0, "Negative Guidance minimum sigma"),
-            "token_merging_ratio": OptionInfo(0.0, "Token merging ratio"),
+            "s_min_uncond": OptionInfo(
+                0.0,
+                "Negative Guidance minimum sigma",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 15.0, "step": 0.01},
+            )
+            .link(
+                "PR",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177",
+            )
+            .info(
+                "skip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster"
+            ),
+            "token_merging_ratio": OptionInfo(
+                0.0,
+                "Token merging ratio",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 0.9, "step": 0.1},
+            )
+            .link(
+                "PR",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9256",
+            )
+            .info("0=disable, higher=faster"),
             "token_merging_ratio_img2img": OptionInfo(
-                0.0, "Token merging ratio for img2img"
-            ),
+                0.0,
+                "Token merging ratio for img2img",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 0.9, "step": 0.1},
+            ).info("only applies if non-zero and overrides above"),
             "token_merging_ratio_hr": OptionInfo(
-                0.0, "Token merging ratio for high-res pass"
-            ),
+                0.0,
+                "Token merging ratio for high-res pass",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 0.9, "step": 0.1},
+            ).info("only applies if non-zero and overrides above"),
             "pad_cond_uncond": OptionInfo(
                 False, "Pad prompt/negative prompt to be same length"
+            ).info(
+                "improves performance when prompt and negative prompt have different lengths; changes seeds"
             ),
             "experimental_persistent_cond_cache": OptionInfo(
                 False, "persistent cond cache"
-            ),
+            ).info("Experimental, keep cond caches across jobs, reduce overhead."),
         },
     )
 )
@@ -643,29 +963,50 @@ options_templates.update(
             ),
             "interrogate_return_ranks": OptionInfo(
                 False, "Include ranks of model tags matches in results."
+            ).info("booru only"),
+            "interrogate_clip_num_beams": OptionInfo(
+                1,
+                "BLIP: num_beams",
+                gr.Slider,
+                {"minimum": 1, "maximum": 16, "step": 1},
             ),
-            "interrogate_clip_num_beams": OptionInfo(1, "BLIP: num_beams"),
             "interrogate_clip_min_length": OptionInfo(
-                24, "BLIP: minimum description length"
+                24,
+                "BLIP: minimum description length",
+                gr.Slider,
+                {"minimum": 1, "maximum": 128, "step": 1},
             ),
             "interrogate_clip_max_length": OptionInfo(
-                48, "BLIP: maximum description length"
+                48,
+                "BLIP: maximum description length",
+                gr.Slider,
+                {"minimum": 1, "maximum": 256, "step": 1},
             ),
             "interrogate_clip_dict_limit": OptionInfo(
                 1500, "CLIP: maximum number of lines in text file"
-            ),
+            ).info("0 = No limit"),
             "interrogate_clip_skip_categories": OptionInfo(
-                [], "CLIP: skip inquire categories"
+                [],
+                "CLIP: skip inquire categories",
             ),
             "interrogate_deepbooru_score_threshold": OptionInfo(
-                0.5, "deepbooru: score threshold"
+                0.5,
+                "deepbooru: score threshold",
+                gr.Slider,
+                {"minimum": 0, "maximum": 1, "step": 0.01},
             ),
             "deepbooru_sort_alpha": OptionInfo(
                 True, "deepbooru: sort tags alphabetically"
-            ),
-            "deepbooru_use_spaces": OptionInfo(True, "deepbooru: use spaces in tags"),
-            "deepbooru_escape": OptionInfo(True, "deepbooru: escape (\\) brackets"),
-            "deepbooru_filter_tags": OptionInfo("", "deepbooru: filter out those tags"),
+            ).info("if not: sort by score"),
+            "deepbooru_use_spaces": OptionInfo(
+                True, "deepbooru: use spaces in tags"
+            ).info("if not: use underscores"),
+            "deepbooru_escape": OptionInfo(
+                True, "deepbooru: escape (\\) brackets"
+            ).info("so they are used as literal brackets and not for emphasis"),
+            "deepbooru_filter_tags": OptionInfo(
+                "", "deepbooru: filter out those tags"
+            ).info("separate by comma"),
         },
     )
 )
@@ -676,25 +1017,57 @@ options_templates.update(
         {
             "extra_networks_show_hidden_directories": OptionInfo(
                 True, "Show hidden directories"
-            ),
+            ).info('directory is hidden if its name starts with ".".'),
             "extra_networks_hidden_models": OptionInfo(
-                "When searched", "Show cards for models in hidden directories"
-            ),
-            "extra_networks_default_view": OptionInfo(
-                "cards", "Default view for Extra Networks"
+                "When searched",
+                "Show cards for models in hidden directories",
+                gr.Radio,
+                {"choices": ["Always", "When searched", "Never"]},
+            ).info(
+                '"When searched" option will only show the item when the search string has 4 characters or more'
             ),
             "extra_networks_default_multiplier": OptionInfo(
-                1.0, "Multiplier for extra networks"
+                1.0,
+                "Default multiplier for extra networks",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 2.0, "step": 0.01},
             ),
-            "extra_networks_card_width": OptionInfo(0, "Card width for Extra Networks"),
+            "extra_networks_card_width": OptionInfo(
+                0, "Card width for Extra Networks"
+            ).info("in pixels"),
             "extra_networks_card_height": OptionInfo(
                 0, "Card height for Extra Networks"
+            ).info("in pixels"),
+            "extra_networks_card_text_scale": OptionInfo(
+                1.0,
+                "Card text scale",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 2.0, "step": 0.01},
+            ).info("1 = original size"),
+            "extra_networks_card_show_desc": OptionInfo(
+                True, "Show description on card"
             ),
             "extra_networks_add_text_separator": OptionInfo(
                 " ", "Extra networks separator"
+            ).info(
+                "extra text to add before <...> when adding extra network to prompt"
             ),
-            "ui_extra_networks_tab_reorder": OptionInfo("", "Extra networks tab order"),
-            "sd_hypernetwork": OptionInfo("None", "Add hypernetwork to prompt"),
+            "ui_extra_networks_tab_reorder": OptionInfo(
+                "", "Extra networks tab order"
+            ).needs_restart(),
+            "textual_inversion_print_at_load": OptionInfo(
+                False, "Print a list of Textual Inversion embeddings when loading model"
+            ),
+            "textual_inversion_add_hashes_to_infotext": OptionInfo(
+                True, "Add Textual Inversion hashes to infotext"
+            ),
+            "sd_hypernetwork": OptionInfo(
+                "None",
+                "Add hypernetwork to prompt",
+                gr.Dropdown,
+                lambda: {"choices": ["None", *hypernetworks]},
+                refresh=reload_hypernetworks,
+            ),
         },
     )
 )
@@ -703,8 +1076,20 @@ options_templates.update(
     options_section(
         ("ui", "User interface"),
         {
-            "localization": OptionInfo("None", "Localization"),
-            "img2img_editor_height": OptionInfo(720, "img2img: height of image editor"),
+            "gradio_theme": OptionInfo(
+                "Default",
+                "Gradio theme",
+                ui_components.DropdownEditable,
+                lambda: {"choices": ["Default"] + gradio_hf_hub_themes},
+            ).needs_restart(),
+            "img2img_editor_height": OptionInfo(
+                720,
+                "img2img: height of image editor",
+                gr.Slider,
+                {"minimum": 80, "maximum": 1600, "step": 1},
+            )
+            .info("in pixels")
+            .needs_restart(),
             "return_grid": OptionInfo(True, "Show grid in results for web"),
             "return_mask": OptionInfo(
                 False, "For inpainting, include the greyscale mask in results for web"
@@ -721,7 +1106,6 @@ options_templates.update(
             "send_size": OptionInfo(
                 True, "Send size when sending prompt or image to another interface"
             ),
-            "font": OptionInfo("", "Font for image grids that have text"),
             "js_modal_lightbox": OptionInfo(True, "Enable full page image viewer"),
             "js_modal_lightbox_initially_zoomed": OptionInfo(
                 True, "Show images zoomed in by default in full page image viewer"
@@ -737,34 +1121,66 @@ options_templates.update(
             ),
             "samplers_in_dropdown": OptionInfo(
                 True, "Use dropdown for sampler selection instead of radio group"
-            ),
+            ).needs_restart(),
             "dimensions_and_batch_together": OptionInfo(
                 True, "Show Width/Height and Batch sliders in same row"
-            ),
+            ).needs_restart(),
             "keyedit_precision_attention": OptionInfo(
-                0.1, "Ctrl+up/down precision when editing (attention:1.1)"
+                0.1,
+                "Ctrl+up/down precision when editing (attention:1.1)",
+                gr.Slider,
+                {"minimum": 0.01, "maximum": 0.2, "step": 0.001},
             ),
             "keyedit_precision_extra": OptionInfo(
-                0.05, "Ctrl+up/down precision when editing <extra networks:0.9>"
+                0.05,
+                "Ctrl+up/down precision when editing <extra networks:0.9>",
+                gr.Slider,
+                {"minimum": 0.01, "maximum": 0.2, "step": 0.001},
             ),
             "keyedit_delimiters": OptionInfo(
                 ".,\\/!?%^*;:{}=`~()", "Ctrl+up/down word delimiters"
             ),
+            "keyedit_move": OptionInfo(True, "Alt+left/right moves prompt elements"),
             "quicksettings_list": OptionInfo(
-                ["sd_model_checkpoint"], "Quicksettings list"
-            ),
-            "ui_tab_order": OptionInfo([], "UI tab order"),
-            "hidden_tabs": OptionInfo([], "Hidden UI tabs"),
-            "ui_reorder_list": OptionInfo([], "txt2img/img2img UI item order"),
+                ["sd_model_checkpoint"],
+                "Quicksettings list",
+                ui_components.DropdownMulti,
+                lambda: {"choices": list(opts.data_labels.keys())},
+            )
+            .js("info", "settingsHintsShowQuicksettings")
+            .info(
+                "setting entries that appear at the top of page rather than in settings tab"
+            )
+            .needs_restart(),
+            "ui_tab_order": OptionInfo(
+                [],
+                "UI tab order",
+                ui_components.DropdownMulti,
+                lambda: {"choices": list(tab_names)},
+            ).needs_restart(),
+            "hidden_tabs": OptionInfo(
+                [],
+                "Hidden UI tabs",
+                ui_components.DropdownMulti,
+                lambda: {"choices": list(tab_names)},
+            ).needs_restart(),
+            "ui_reorder_list": OptionInfo(
+                [],
+                "txt2img/img2img UI item order",
+                ui_components.DropdownMulti,
+                lambda: {"choices": list(shared_items.ui_reorder_categories())},
+            )
+            .info("selected items appear first")
+            .needs_restart(),
             "hires_fix_show_sampler": OptionInfo(
                 False, "Hires fix: show hires sampler selection"
-            ),
+            ).needs_restart(),
             "hires_fix_show_prompts": OptionInfo(
                 False, "Hires fix: show hires prompt and negative prompt"
-            ),
+            ).needs_restart(),
             "disable_token_counters": OptionInfo(
                 False, "Disable prompt token counters"
-            ),
+            ).needs_restart(),
         },
     )
 )
@@ -779,14 +1195,29 @@ options_templates.update(
             "add_model_name_to_info": OptionInfo(
                 True, "Add model name to generation information"
             ),
+            "add_user_name_to_info": OptionInfo(
+                False, "Add user name to generation information when authenticated"
+            ),
             "add_version_to_infotext": OptionInfo(
                 True, "Add program version to generation information"
             ),
             "disable_weights_auto_swap": OptionInfo(
                 True, "Disregard checkpoint information from pasted infotext"
-            ),
+            ).info("when reading generation parameters from text into UI"),
             "infotext_styles": OptionInfo(
-                "Apply if any", "Infer styles from prompts of pasted infotext"
+                "Apply if any",
+                "Infer styles from prompts of pasted infotext",
+                gr.Radio,
+                {"choices": ["Ignore", "Apply", "Discard", "Apply if any"]},
+            )
+            .info("when reading generation parameters from text into UI)")
+            .html(
+                """<ul style='margin-left: 1.5em'>
+<li>Ignore: keep prompt and styles dropdown as it is.</li>
+<li>Apply: remove style text from prompt, always replace styles dropdown value with found styles (even if none are found).</li>
+<li>Discard: remove style text from prompt, keep styles dropdown as it is.</li>
+<li>Apply if any: remove style text from prompt; if any styles are found in prompt, put them into styles dropdown, otherwise keep it as it is.</li>
+</ul>"""
             ),
         },
     )
@@ -800,15 +1231,37 @@ options_templates.update(
             "live_previews_enable": OptionInfo(
                 True, "Show live previews of the created image"
             ),
-            "live_previews_image_format": OptionInfo("png", "Live preview file format"),
+            "live_previews_image_format": OptionInfo(
+                "png",
+                "Live preview file format",
+                gr.Radio,
+                {"choices": ["jpeg", "png", "webp"]},
+            ),
             "show_progress_grid": OptionInfo(
                 True, "Show previews of all images generated in a batch as a grid"
             ),
             "show_progress_every_n_steps": OptionInfo(
-                10, "Live preview display period"
+                10,
+                "Live preview display period",
+                gr.Slider,
+                {"minimum": -1, "maximum": 32, "step": 1},
+            ).info(
+                "in sampling steps - show new live preview image every N sampling steps; -1 = only show after completion of batch"
             ),
-            "show_progress_type": OptionInfo("Approx NN", "Live preview method"),
-            "live_preview_content": OptionInfo("Prompt", "Live preview subject"),
+            "show_progress_type": OptionInfo(
+                "Approx NN",
+                "Live preview method",
+                gr.Radio,
+                {"choices": ["Full", "Approx NN", "Approx cheap", "TAESD"]},
+            ).info(
+                "Full = slow but pretty; Approx NN and TAESD = fast but low quality; Approx cheap = super fast but terrible otherwise"
+            ),
+            "live_preview_content": OptionInfo(
+                "Prompt",
+                "Live preview subject",
+                gr.Radio,
+                {"choices": ["Combined", "Prompt", "Negative prompt"]},
+            ),
             "live_preview_refresh_period": OptionInfo(
                 1000, "Progressbar and preview update period"
             ).info("in milliseconds"),
@@ -820,24 +1273,93 @@ options_templates.update(
     options_section(
         ("sampler-params", "Sampler parameters"),
         {
-            "hide_samplers": OptionInfo([], "Hide samplers in user interface"),
-            "eta_ddim": OptionInfo(0.0, "Eta for DDIM"),
-            "eta_ancestral": OptionInfo(1.0, "Eta for ancestral samplers"),
-            "ddim_discretize": OptionInfo("uniform", "img2img DDIM discretize"),
-            "s_churn": OptionInfo(0.0, "sigma churn"),
-            "s_tmin": OptionInfo(0.0, "sigma tmin"),
-            "s_noise": OptionInfo(1.0, "sigma noise"),
-            "k_sched_type": OptionInfo("Automatic", "scheduler type"),
-            "sigma_min": OptionInfo(0.0, "sigma min"),
-            "sigma_max": OptionInfo(0.0, "sigma max"),
-            "rho": OptionInfo(0.0, "rho"),
-            "eta_noise_seed_delta": OptionInfo(0, "Eta noise seed delta"),
+            "hide_samplers": OptionInfo(
+                [],
+                "Hide samplers in user interface",
+                gr.CheckboxGroup,
+                lambda: {"choices": [x.name for x in list_samplers()]},
+            ).needs_restart(),
+            "eta_ddim": OptionInfo(
+                0.0,
+                "Eta for DDIM",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ).info("noise multiplier; higher = more unperdictable results"),
+            "eta_ancestral": OptionInfo(
+                1.0,
+                "Eta for ancestral samplers",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ).info(
+                "noise multiplier; applies to Euler a and other samplers that have a in them"
+            ),
+            "ddim_discretize": OptionInfo(
+                "uniform",
+                "img2img DDIM discretize",
+                gr.Radio,
+                {"choices": ["uniform", "quad"]},
+            ),
+            "s_churn": OptionInfo(
+                0.0,
+                "sigma churn",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ),
+            "s_tmin": OptionInfo(
+                0.0,
+                "sigma tmin",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ),
+            "s_noise": OptionInfo(
+                1.0,
+                "sigma noise",
+                gr.Slider,
+                {"minimum": 0.0, "maximum": 1.0, "step": 0.01},
+            ),
+            "k_sched_type": OptionInfo(
+                "Automatic",
+                "scheduler type",
+                gr.Dropdown,
+                {"choices": ["Automatic", "karras", "exponential", "polyexponential"]},
+            ).info(
+                "lets you override the noise schedule for k-diffusion samplers; choosing Automatic disables the three parameters below"
+            ),
+            "sigma_min": OptionInfo(0.0, "sigma min", gr.Number).info(
+                "0 = default (~0.03); minimum noise strength for k-diffusion noise scheduler"
+            ),
+            "sigma_max": OptionInfo(0.0, "sigma max", gr.Number).info(
+                "0 = default (~14.6); maximum noise strength for k-diffusion noise schedule"
+            ),
+            "rho": OptionInfo(0.0, "rho", gr.Number).info(
+                "0 = default (7 for karras, 1 for polyexponential); higher values result in a more steep noise schedule (decreases faster)"
+            ),
+            "eta_noise_seed_delta": OptionInfo(
+                0, "Eta noise seed delta", gr.Number, {"precision": 0}
+            ).info(
+                "ENSD; does not improve anything, just produces different results for ancestral samplers - only useful for reproducing images"
+            ),
             "always_discard_next_to_last_sigma": OptionInfo(
                 False, "Always discard next-to-last sigma"
+            ).link(
+                "PR",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/6044",
             ),
-            "uni_pc_variant": OptionInfo("bh1", "UniPC variant"),
-            "uni_pc_skip_type": OptionInfo("time_uniform", "UniPC skip type"),
-            "uni_pc_order": OptionInfo(3, "UniPC order"),
+            "uni_pc_variant": OptionInfo(
+                "bh1",
+                "UniPC variant",
+                gr.Radio,
+                {"choices": ["bh1", "bh2", "vary_coeff"]},
+            ),
+            "uni_pc_skip_type": OptionInfo(
+                "time_uniform",
+                "UniPC skip type",
+                gr.Radio,
+                {"choices": ["time_uniform", "time_quadratic", "logSNR"]},
+            ),
+            "uni_pc_order": OptionInfo(
+                3, "UniPC order", gr.Slider, {"minimum": 1, "maximum": 50, "step": 1}
+            ).info("must be < sampling steps"),
             "uni_pc_lower_order_final": OptionInfo(True, "UniPC lower order final"),
         },
     )
@@ -848,13 +1370,26 @@ options_templates.update(
         ("postprocessing", "Postprocessing"),
         {
             "postprocessing_enable_in_main_ui": OptionInfo(
-                [], "Enable postprocessing operations in txt2img and img2img tabs"
+                [],
+                "Enable postprocessing operations in txt2img and img2img tabs",
+                ui_components.DropdownMulti,
+                lambda: {
+                    "choices": [x.name for x in shared_items.postprocessing_scripts()]
+                },
             ),
             "postprocessing_operation_order": OptionInfo(
-                [], "Postprocessing operation order"
+                [],
+                "Postprocessing operation order",
+                ui_components.DropdownMulti,
+                lambda: {
+                    "choices": [x.name for x in shared_items.postprocessing_scripts()]
+                },
             ),
             "upscaling_max_images_in_cache": OptionInfo(
-                5, "Maximum number of images in upscaling cache"
+                5,
+                "Maximum number of images in upscaling cache",
+                gr.Slider,
+                {"minimum": 0, "maximum": 10, "step": 1},
             ),
         },
     )
@@ -868,6 +1403,8 @@ options_templates.update(
             "disable_all_extensions": OptionInfo(
                 "none",
                 "Disable all extensions (preserves the list of disabled extensions)",
+                gr.Radio,
+                {"choices": ["none", "extra", "all"]},
             ),
             "restore_config_state_file": OptionInfo(
                 "", "Config state file to restore from, under 'config-states/' folder"
@@ -1100,6 +1637,9 @@ class Shared(sys.modules[__name__].__class__):
 sd_model: LatentDiffusion = None  # this var is here just for IDE's type checking; it cannot be accessed because the class field above will be accessed instead
 sys.modules[__name__].__class__ = Shared
 
+settings_components = None
+"""assinged from ui.py, a mapping on setting names to gradio components repsponsible for those settings"""
+
 latent_upscale_default_mode = "Latent"
 latent_upscale_modes = {
     "Latent": {"mode": "bilinear", "antialias": False},
@@ -1116,14 +1656,34 @@ clip_model = None
 
 progress_print_out = sys.stdout
 
+gradio_theme = gr.themes.Base()
 
-# Disable showing total progress
+
+def reload_gradio_theme(theme_name=None):
+    global gradio_theme
+    if not theme_name:
+        theme_name = opts.gradio_theme
+
+    default_theme_args = dict(
+        font=["Source Sans Pro", "ui-sans-serif", "system-ui", "sans-serif"],
+        font_mono=["IBM Plex Mono", "ui-monospace", "Consolas", "monospace"],
+    )
+
+    if theme_name == "Default":
+        gradio_theme = gr.themes.Default(**default_theme_args)
+    else:
+        try:
+            gradio_theme = gr.themes.ThemeClass.from_hub(theme_name)
+        except Exception as e:
+            errors.display(e, "changing gradio theme")
+            gradio_theme = gr.themes.Default(**default_theme_args)
+
+
 class TotalTQDM:
     def __init__(self):
         self._tqdm = None
 
     def reset(self):
-        return
         self._tqdm = tqdm.tqdm(
             desc="Total progress",
             total=state.job_count * state.sampling_steps,
@@ -1132,7 +1692,6 @@ class TotalTQDM:
         )
 
     def update(self):
-        return
         if not opts.multiple_tqdm or cmd_opts.disable_console_progressbars:
             return
         if self._tqdm is None:
@@ -1140,7 +1699,6 @@ class TotalTQDM:
         self._tqdm.update()
 
     def updateTotal(self, new_total):
-        return
         if not opts.multiple_tqdm or cmd_opts.disable_console_progressbars:
             return
         if self._tqdm is None:
@@ -1148,7 +1706,6 @@ class TotalTQDM:
         self._tqdm.total = new_total
 
     def clear(self):
-        return
         if self._tqdm is not None:
             self._tqdm.refresh()
             self._tqdm.close()
@@ -1157,11 +1714,18 @@ class TotalTQDM:
 
 total_tqdm = TotalTQDM()
 
+mem_mon = modules.memmon.MemUsageMonitor("MemMon", device, opts)
+mem_mon.start()
+
+
+def natural_sort_key(s, regex=re.compile("([0-9]+)")):
+    return [int(text) if text.isdigit() else text.lower() for text in regex.split(s)]
+
 
 def listfiles(dirname):
     filenames = [
         os.path.join(dirname, x)
-        for x in sorted(os.listdir(dirname), key=str.lower)
+        for x in sorted(os.listdir(dirname), key=natural_sort_key)
         if not x.startswith(".")
     ]
     return [file for file in filenames if os.path.isfile(file)]
@@ -1188,8 +1752,11 @@ def walk_files(path, allowed_extensions=None):
     if allowed_extensions is not None:
         allowed_extensions = set(allowed_extensions)
 
-    for root, _, files in os.walk(path, followlinks=True):
-        for filename in files:
+    items = list(os.walk(path, followlinks=True))
+    items = sorted(items, key=lambda x: natural_sort_key(x[0]))
+
+    for root, _, files in items:
+        for filename in sorted(files, key=natural_sort_key):
             if allowed_extensions is not None:
                 _, ext = os.path.splitext(filename)
                 if ext not in allowed_extensions:

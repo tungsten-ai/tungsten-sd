@@ -28,7 +28,6 @@ def initialize():
     modules.scripts.load_scripts()
     modules.sd_models.list_models()
     modules.sd_vae.refresh_vae_list()
-    modules.sd_vae.reload_vae_weights()
     modules.textual_inversion.textual_inversion.list_textual_inversion_templates()
     modules.scripts.scripts_txt2img.initialize_scripts(is_img2img=False)
     modules.script_callbacks.on_list_optimizers(

@@ -2,8 +2,8 @@ import argparse
 import json
 import os
 
+from modules.paths_internal import data_path  # noqa: F401
 from modules.paths_internal import (
-    data_path,  # noqa: F401
     extensions_builtin_dir,
     extensions_dir,
     models_path,
@@ -61,6 +61,11 @@ parser.add_argument(
     "--skip-install",
     action="store_true",
     help="launch.py argument: skip installation of packages",
+)
+parser.add_argument(
+    "--do-not-download-clip",
+    action="store_true",
+    help="do not download CLIP model even if it's not included in the checkpoint",
 )
 parser.add_argument(
     "--data-dir",
@@ -521,7 +526,7 @@ parser.add_argument(
     "--no-download-sd-model",
     action="store_true",
     help="don't download SD1.5 model even if no model is found in --ckpt-dir",
-    default=True,
+    default=False,
 )
 parser.add_argument(
     "--subpath",
@@ -530,4 +535,15 @@ parser.add_argument(
 )
 parser.add_argument(
     "--add-stop-route", action="store_true", help="add /_stop route to stop server"
+)
+parser.add_argument(
+    "--api-server-stop",
+    action="store_true",
+    help="enable server stop/restart/kill via api",
+)
+parser.add_argument(
+    "--timeout-keep-alive",
+    type=int,
+    default=30,
+    help="set timeout_keep_alive for uvicorn",
 )

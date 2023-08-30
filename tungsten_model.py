@@ -22,7 +22,7 @@ class Input(BaseIO):
         default="",
     )
     image_dimensions: str = Option(
-        default="768x512",
+        default="512x768",
         description="Pixel dimensions of output image (width x height)",
         choices=[
             "512x512",
@@ -224,3 +224,11 @@ class StableDiffusion:
           - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the negative prompt.
         """
         return []
+
+
+if __name__ == "__main__":
+    inp = Input(prompt="hello")
+    model = StableDiffusion()
+    model.setup()
+    outputs = model.predict([inp])
+    print(outputs[0].images[0].path)

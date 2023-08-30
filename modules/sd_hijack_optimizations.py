@@ -5,15 +5,21 @@ import math
 import ldm.modules.attention
 import ldm.modules.diffusionmodules.model
 import psutil
+import sgm.modules.attention
+import sgm.modules.diffusionmodules.model
 import torch
 from einops import rearrange
 from ldm.util import default
 from torch import einsum
 
-from modules import devices, errors, shared, sub_quadratic_attention
+from modules import devices, errors, shared
+from modules.hypernetworks import hypernetwork
 
 diffusionmodules_model_AttnBlock_forward = (
     ldm.modules.diffusionmodules.model.AttnBlock.forward
+)
+sgm_diffusionmodules_model_AttnBlock_forward = (
+    sgm.modules.diffusionmodules.model.AttnBlock.forward
 )
 
 
@@ -40,6 +46,13 @@ class SdOptimization:
             diffusionmodules_model_AttnBlock_forward
         )
 
+        sgm.modules.attention.CrossAttention.forward = (
+            hypernetwork.attention_CrossAttention_forward
+        )
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = (
+            sgm_diffusionmodules_model_AttnBlock_forward
+        )
+
 
 class SdOptimizationXformers(SdOptimization):
     name = "xformers"
@@ -56,6 +69,10 @@ class SdOptimizationXformers(SdOptimization):
     def apply(self):
         ldm.modules.attention.CrossAttention.forward = xformers_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = (
+            xformers_attnblock_forward
+        )
+        sgm.modules.attention.CrossAttention.forward = xformers_attention_forward
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = (
             xformers_attnblock_forward
         )
 
@@ -78,6 +95,12 @@ class SdOptimizationSdpNoMem(SdOptimization):
         ldm.modules.diffusionmodules.model.AttnBlock.forward = (
             sdp_no_mem_attnblock_forward
         )
+        sgm.modules.attention.CrossAttention.forward = (
+            scaled_dot_product_no_mem_attention_forward
+        )
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = (
+            sdp_no_mem_attnblock_forward
+        )
 
 
 class SdOptimizationSdp(SdOptimizationSdpNoMem):
@@ -91,6 +114,10 @@ class SdOptimizationSdp(SdOptimizationSdpNoMem):
             scaled_dot_product_attention_forward
         )
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sdp_attnblock_forward
+        sgm.modules.attention.CrossAttention.forward = (
+            scaled_dot_product_attention_forward
+        )
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = sdp_attnblock_forward
 
 
 class SdOptimizationSubQuad(SdOptimization):
@@ -103,6 +130,10 @@ class SdOptimizationSubQuad(SdOptimization):
         ldm.modules.diffusionmodules.model.AttnBlock.forward = (
             sub_quad_attnblock_forward
         )
+        sgm.modules.attention.CrossAttention.forward = sub_quad_attention_forward
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = (
+            sub_quad_attnblock_forward
+        )
 
 
 class SdOptimizationV1(SdOptimization):
@@ -113,6 +144,7 @@ class SdOptimizationV1(SdOptimization):
 
     def apply(self):
         ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward_v1
+        sgm.modules.attention.CrossAttention.forward = split_cross_attention_forward_v1
 
 
 class SdOptimizationInvokeAI(SdOptimization):
@@ -127,6 +159,9 @@ class SdOptimizationInvokeAI(SdOptimization):
         ldm.modules.attention.CrossAttention.forward = (
             split_cross_attention_forward_invokeAI
         )
+        sgm.modules.attention.CrossAttention.forward = (
+            split_cross_attention_forward_invokeAI
+        )
 
 
 class SdOptimizationDoggettx(SdOptimization):
@@ -137,6 +172,10 @@ class SdOptimizationDoggettx(SdOptimization):
     def apply(self):
         ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = (
+            cross_attention_attnblock_forward
+        )
+        sgm.modules.attention.CrossAttention.forward = split_cross_attention_forward
+        sgm.modules.diffusionmodules.model.AttnBlock.forward = (
             cross_attention_attnblock_forward
         )
 
@@ -178,7 +217,7 @@ def get_available_vram():
 
 
 # see https://github.com/basujindal/stable-diffusion/pull/117 for discussion
-def split_cross_attention_forward_v1(self, x, context=None, mask=None):
+def split_cross_attention_forward_v1(self, x, context=None, mask=None, **kwargs):
     h = self.heads
 
     q_in = self.to_q(x)
@@ -221,7 +260,7 @@ def split_cross_attention_forward_v1(self, x, context=None, mask=None):
 
 
 # taken from https://github.com/Doggettx/stable-diffusion and modified
-def split_cross_attention_forward(self, x, context=None, mask=None):
+def split_cross_attention_forward(self, x, context=None, mask=None, **kwargs):
     h = self.heads
 
     q_in = self.to_q(x)
@@ -273,9 +312,9 @@ def split_cross_attention_forward(self, x, context=None, mask=None):
                 f"Need: {mem_required / 64 / gb:0.1f}GB free, Have:{mem_free_total / gb:0.1f}GB free"
             )
 
-        slice_size = q.shape[1] // steps if (q.shape[1] % steps) == 0 else q.shape[1]
+        slice_size = q.shape[1] // steps
         for i in range(0, q.shape[1], slice_size):
-            end = i + slice_size
+            end = min(i + slice_size, q.shape[1])
             s1 = einsum("b i d, b j d -> b i j", q[:, i:end], k)
 
             s2 = s1.softmax(dim=-1, dtype=q.dtype)
@@ -376,7 +415,7 @@ def einsum_op(q, k, v):
     return einsum_op_tensor_mem(q, k, v, 32)
 
 
-def split_cross_attention_forward_invokeAI(self, x, context=None, mask=None):
+def split_cross_attention_forward_invokeAI(self, x, context=None, mask=None, **kwargs):
     h = self.heads
 
     q = self.to_q(x)
@@ -405,7 +444,7 @@ def split_cross_attention_forward_invokeAI(self, x, context=None, mask=None):
 
 # Based on Birch-san's modified implementation of sub-quadratic attention from https://github.com/Birch-san/diffusers/pull/1
 # The sub_quad_attention_forward function is under the MIT License listed under Memory Efficient Attention in the Licenses section of the web UI interface
-def sub_quad_attention_forward(self, x, context=None, mask=None):
+def sub_quad_attention_forward(self, x, context=None, mask=None, **kwargs):
     assert (
         mask is None
     ), "attention-mask not currently implemented for SubQuadraticCrossAttnProcessor."
@@ -522,7 +561,7 @@ def get_xformers_flash_attention_op(q, k, v):
     return None
 
 
-def xformers_attention_forward(self, x, context=None, mask=None):
+def xformers_attention_forward(self, x, context=None, mask=None, **kwargs):
     h = self.heads
     q_in = self.to_q(x)
     context = default(context, x)
@@ -550,7 +589,7 @@ def xformers_attention_forward(self, x, context=None, mask=None):
 
 # Based on Diffusers usage of scaled dot product attention from https://github.com/huggingface/diffusers/blob/c7da8fd23359a22d0df2741688b5b4f33c26df21/src/diffusers/models/cross_attention.py
 # The scaled_dot_product_attention_forward function contains parts of code under Apache-2.0 license listed under Scaled Dot Product Attention in the Licenses section of the web UI interface
-def scaled_dot_product_attention_forward(self, x, context=None, mask=None):
+def scaled_dot_product_attention_forward(self, x, context=None, mask=None, **kwargs):
     batch_size, sequence_length, inner_dim = x.shape
 
     if mask is not None:
@@ -591,7 +630,9 @@ def scaled_dot_product_attention_forward(self, x, context=None, mask=None):
     return hidden_states
 
 
-def scaled_dot_product_no_mem_attention_forward(self, x, context=None, mask=None):
+def scaled_dot_product_no_mem_attention_forward(
+    self, x, context=None, mask=None, **kwargs
+):
     with torch.backends.cuda.sdp_kernel(
         enable_flash=True, enable_math=True, enable_mem_efficient=False
     ):

@@ -18,8 +18,7 @@ def run_postprocessing(
 ):
     devices.torch_gc()
 
-    shared.state.begin()
-    shared.state.job = "extras"
+    shared.state.begin(job="extras")
 
     image_data = []
     image_names = []
@@ -65,7 +64,9 @@ def run_postprocessing(
     for image, name in zip(image_data, image_names):
         shared.state.textinfo = name
 
-        existing_pnginfo = image.info or {}
+        parameters, existing_pnginfo = images.read_info_from_image(image)
+        if parameters:
+            existing_pnginfo["parameters"] = parameters
 
         pp = scripts_postprocessing.PostprocessedImage(image.convert("RGB"))
 
@@ -102,7 +103,7 @@ def run_postprocessing(
 
     devices.torch_gc()
 
-    return outputs, ui_common.plaintext_to_html(infotext), ""
+    return outputs, "", ""
 
 
 def run_extras(

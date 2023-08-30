@@ -102,7 +102,7 @@ def txt2img(
     )
 
     # Controlnet script
-    if controlnet_pose_image or controlnet_depth_image:
+    if use_controlnet:
         processing.scripts = scripts.scripts_txt2img
         processing.script_args = []
         if controlnet_pose_image:

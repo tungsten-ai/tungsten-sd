@@ -7,3 +7,9 @@
 [submodule "extensions/sd-webui-controlnet"]
 	path = extensions/sd-webui-controlnet
 	url = https://github.com/Mikubill/sd-webui-controlnet
+[submodule "repositories/CodeFormer"]
+	path = repositories/CodeFormer
+	url = https://github.com/sczhou/CodeFormer.git
+[submodule "repositories/generative-models"]
+	path = repositories/generative-models
+	url = https://github.com/Stability-AI/generative-models.git
