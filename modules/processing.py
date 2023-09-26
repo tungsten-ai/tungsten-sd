@@ -5,6 +5,7 @@ import math
 import os
 import random
 import sys
+import time
 from typing import Any, Dict, List
 
 import numpy as np
@@ -20,8 +21,19 @@ import modules.sd_hijack
 import modules.sd_models as sd_models
 import modules.sd_vae as sd_vae
 import modules.shared as shared
-from modules import (devices, errors, extra_networks, lowvram, prompt_parser,
-                     scripts, sd_samplers, sd_unet, sd_vae_approx)
+from modules import (
+    devices,
+    errors,
+    extra_networks,
+    lowvram,
+    prompt_parser,
+    rng,
+    scripts,
+    sd_samplers,
+    sd_unet,
+    sd_vae_approx,
+)
+from modules.rng import slerp  # noqa: F401
 from modules.sd_hijack import model_hijack
 from modules.shared import cmd_opts, opts, state
 
@@ -104,6 +116,7 @@ class StableDiffusionProcessing:
         s_tmax: float = None,
         s_tmin: float = 0.0,
         s_noise: float = 1.0,
+        rng: rng.ImageRNG = None,
         override_settings: Dict[str, Any] = None,
         override_settings_restore_afterwards: bool = True,
         sampler_index: int = None,
@@ -190,6 +203,7 @@ class StableDiffusionProcessing:
         self.cached_c = StableDiffusionProcessing.cached_c
         self.uc = None
         self.c = None
+        self.rng = rng
 
         self.user = None
 
@@ -202,9 +216,10 @@ class StableDiffusionProcessing:
             self.sd_model.model.conditioning_key in {"hybrid", "concat"}
         )
 
-        return txt2img_image_conditioning(
+        ret = txt2img_image_conditioning(
             self.sd_model, x, width or self.width, height or self.height
         )
+        return ret
 
     def depth2img_image_conditioning(self, source_image):
         # Use the AddMiDaS helper to Format our source image to suit the MiDaS model
@@ -597,76 +612,15 @@ def create_random_tensors(
     seed_resize_from_w=0,
     p=None,
 ):
-    eta_noise_seed_delta = opts.eta_noise_seed_delta or 0
-    xs = []
-
-    # if we have multiple seeds, this means we are working with batch size>1; this then
-    # enables the generation of additional tensors with noise that the sampler will use during its processing.
-    # Using those pre-generated tensors instead of simple torch.randn allows a batch with seeds [100, 101] to
-    # produce the same images as with two batches [100], [101].
-    if (
-        p is not None
-        and p.sampler is not None
-        and (len(seeds) > 1 and opts.enable_batch_seeds or eta_noise_seed_delta > 0)
-    ):
-        sampler_noises = [[] for _ in range(p.sampler.number_of_needed_noises(p))]
-    else:
-        sampler_noises = None
-
-    for i, seed in enumerate(seeds):
-        noise_shape = (
-            shape
-            if seed_resize_from_h <= 0 or seed_resize_from_w <= 0
-            else (shape[0], seed_resize_from_h // 8, seed_resize_from_w // 8)
-        )
-
-        subnoise = None
-        if subseeds is not None:
-            subseed = 0 if i >= len(subseeds) else subseeds[i]
-
-            subnoise = devices.randn(subseed, noise_shape)
-
-        # randn results depend on device; gpu and cpu get different results for same seed;
-        # the way I see it, it's better to do this on CPU, so that everyone gets same result;
-        # but the original script had it like this, so I do not dare change it for now because
-        # it will break everyone's seeds.
-        noise = devices.randn(seed, noise_shape)
-
-        if subnoise is not None:
-            noise = slerp(subseed_strength, noise, subnoise)
-
-        if noise_shape != shape:
-            x = devices.randn(seed, shape)
-            dx = (shape[2] - noise_shape[2]) // 2
-            dy = (shape[1] - noise_shape[1]) // 2
-            w = noise_shape[2] if dx >= 0 else noise_shape[2] + 2 * dx
-            h = noise_shape[1] if dy >= 0 else noise_shape[1] + 2 * dy
-            tx = 0 if dx < 0 else dx
-            ty = 0 if dy < 0 else dy
-            dx = max(-dx, 0)
-            dy = max(-dy, 0)
-
-            x[:, ty : ty + h, tx : tx + w] = noise[:, dy : dy + h, dx : dx + w]
-            noise = x
-
-        if sampler_noises is not None:
-            cnt = p.sampler.number_of_needed_noises(p)
-
-            if eta_noise_seed_delta > 0:
-                torch.manual_seed(seed + eta_noise_seed_delta)
-
-            for j in range(cnt):
-                sampler_noises[j].append(devices.randn_without_seed(tuple(noise_shape)))
-
-        xs.append(noise)
-
-    if sampler_noises is not None:
-        p.sampler.sampler_noises = [
-            torch.stack(n).to(shared.device) for n in sampler_noises
-        ]
-
-    x = torch.stack(xs).to(shared.device)
-    return x
+    g = rng.ImageRNG(
+        shape,
+        seeds,
+        subseeds=subseeds,
+        subseed_strength=subseed_strength,
+        seed_resize_from_h=seed_resize_from_h,
+        seed_resize_from_w=seed_resize_from_w,
+    )
+    return g.next()
 
 
 def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
@@ -707,7 +661,7 @@ def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
 
 
 def decode_first_stage(model, x):
-    x = model.decode_first_stage(x.to(devices.dtype_vae))
+    x = model.decode_first_stage(x.to(model.device).to(devices.dtype_vae))
 
     return x
 
@@ -738,42 +692,45 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.before_process(p)
 
-    stored_opts = {k: opts.data[k] for k in p.override_settings.keys()}
+    res = process_images_inner(p)
 
-    try:
-        # if no checkpoint override or the override checkpoint can't be found, remove override entry and load opts checkpoint
-        if (
-            sd_models.checkpoint_aliases.get(
-                p.override_settings.get("sd_model_checkpoint")
-            )
-            is None
-        ):
-            p.override_settings.pop("sd_model_checkpoint", None)
-            sd_models.reload_model_weights()
+    # stored_opts = {k: opts.data[k] for k in p.override_settings.keys()}
 
-        for k, v in p.override_settings.items():
-            setattr(opts, k, v)
+    # try:
+    #     # if no checkpoint override or the override checkpoint can't be found, remove override entry and load opts checkpoint
+    #     if (
+    #         sd_models.checkpoint_aliases.get(
+    #             p.override_settings.get("sd_model_checkpoint")
+    #         )
+    #         is None
+    #     ):
+    #         p.override_settings.pop("sd_model_checkpoint", None)
+    #         sd_models.reload_model_weights()
 
-            if k == "sd_model_checkpoint":
-                sd_models.reload_model_weights()
+    #     for k, v in p.override_settings.items():
+    #         setattr(opts, k, v)
 
-            if k == "sd_vae":
-                sd_vae.reload_vae_weights()
+    #         if k == "sd_model_checkpoint":
+    #             sd_models.reload_model_weights()
 
-        sd_models.apply_token_merging(p.sd_model, p.get_token_merging_ratio())
+    #         if k == "sd_vae":
+    #             sd_vae.reload_vae_weights()
 
-        res = process_images_inner(p)
+    #     sd_models.apply_token_merging(p.sd_model, p.get_token_merging_ratio())
 
-    finally:
-        sd_models.apply_token_merging(p.sd_model, 0)
+    #     res = process_images_inner(p)
 
-        # restore opts to original state
-        if p.override_settings_restore_afterwards:
-            for k, v in stored_opts.items():
-                setattr(opts, k, v)
+    # finally:
+    #     pass
+    #     sd_models.apply_token_merging(p.sd_model, 0)
 
-                if k == "sd_vae":
-                    sd_vae.reload_vae_weights()
+    #     # restore opts to original state
+    #     if p.override_settings_restore_afterwards:
+    #         for k, v in stored_opts.items():
+    #             setattr(opts, k, v)
+
+    #             if k == "sd_vae":
+    #                 sd_vae.reload_vae_weights()
 
     return res
 
@@ -852,6 +809,15 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             p.seeds = p.all_seeds[n * p.batch_size : (n + 1) * p.batch_size]
             p.subseeds = p.all_subseeds[n * p.batch_size : (n + 1) * p.batch_size]
 
+            p.rng = rng.ImageRNG(
+                (opt_C, p.height // opt_f, p.width // opt_f),
+                p.seeds,
+                subseeds=p.subseeds,
+                subseed_strength=p.subseed_strength,
+                seed_resize_from_h=p.seed_resize_from_h,
+                seed_resize_from_w=p.seed_resize_from_w,
+            )
+
             if p.scripts is not None:
                 p.scripts.before_process_batch(
                     p,
@@ -898,13 +864,27 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     subseed_strength=p.subseed_strength,
                     prompts=p.prompts,
                 )
-
+            # x_samples_ddim = decode_latent_batch(
+            #     p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True
+            # )
+            # x_samples_ddim = torch.stack(x_samples_ddim).float()
+            # x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+            decode_start_time = time.monotonic()
+            print(f"Decoding latents in {samples_ddim.device}...")
             x_samples_ddim = decode_latent_batch(
-                p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True
+                p.sd_model,
+                samples_ddim,
+                # target_device=devices.device,
+                check_for_nans=True,
             )
             x_samples_ddim = torch.stack(x_samples_ddim).float()
             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+            print(f"done in {round(time.monotonic() - decode_start_time, 2)}s")
 
+            move_to_cpu_start_time = time.monotonic()
+            print("Move latents to cpu...")
+            x_samples_ddim = x_samples_ddim.to(devices.cpu)
+            print(f"done in {round(time.monotonic() - move_to_cpu_start_time, 2)}s")
             del samples_ddim
 
             if lowvram.is_enabled(shared.sd_model):
@@ -943,7 +923,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                             p.seeds[i],
                             p.prompts[i],
                             opts.samples_format,
-                            info=infotext(i),
+                            info="",
                             p=p,
                             suffix="-before-face-restoration",
                         )
@@ -1177,15 +1157,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             if not any(x.name == self.hr_upscaler for x in shared.sd_upscalers):
                 raise Exception(f"could not find upscaler named {self.hr_upscaler}")
 
-        x = create_random_tensors(
-            [opt_C, self.height // opt_f, self.width // opt_f],
-            seeds=seeds,
-            subseeds=subseeds,
-            subseed_strength=self.subseed_strength,
-            seed_resize_from_h=self.seed_resize_from_h,
-            seed_resize_from_w=self.seed_resize_from_w,
-            p=self,
-        )
+        x = self.rng.next()
+
         samples = self.sampler.sample(
             self,
             x,
@@ -1277,13 +1250,15 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             self.truncate_x // 2 : samples.shape[3] - (self.truncate_x + 1) // 2,
         ]
 
-        noise = create_random_tensors(
+        self.rng = rng.ImageRNG(
             samples.shape[1:],
-            seeds=seeds,
-            subseeds=subseeds,
-            subseed_strength=subseed_strength,
-            p=self,
+            self.seeds,
+            subseeds=self.subseeds,
+            subseed_strength=self.subseed_strength,
+            seed_resize_from_h=self.seed_resize_from_h,
+            seed_resize_from_w=self.seed_resize_from_w,
         )
+        noise = self.rng.next()
 
         # GC now before running the next img2img to prevent running out of memory
         x = None

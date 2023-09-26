@@ -17,29 +17,30 @@ def dump_cache():
     """
     Marks cache for writing to disk. 5 seconds after no one else flags the cache for writing, it is written.
     """
+    pass
 
-    global dump_cache_after
-    global dump_cache_thread
+    # global dump_cache_after
+    # global dump_cache_thread
 
-    def thread_func():
-        global dump_cache_after
-        global dump_cache_thread
+    # def thread_func():
+    #     global dump_cache_after
+    #     global dump_cache_thread
 
-        while dump_cache_after is not None and time.time() < dump_cache_after:
-            time.sleep(1)
+    #     while dump_cache_after is not None and time.time() < dump_cache_after:
+    #         time.sleep(1)
 
-        with cache_lock:
-            with open(cache_filename, "w", encoding="utf8") as file:
-                json.dump(cache_data, file, indent=4)
+    #     with cache_lock:
+    #         with open(cache_filename, "w", encoding="utf8") as file:
+    #             json.dump(cache_data, file, indent=4)
 
-            dump_cache_after = None
-            dump_cache_thread = None
+    #         dump_cache_after = None
+    #         dump_cache_thread = None
 
-    with cache_lock:
-        dump_cache_after = time.time() + 5
-        if dump_cache_thread is None:
-            dump_cache_thread = threading.Thread(name='cache-writer', target=thread_func)
-            dump_cache_thread.start()
+    # with cache_lock:
+    #     dump_cache_after = time.time() + 5
+    #     if dump_cache_thread is None:
+    #         dump_cache_thread = threading.Thread(name='cache-writer', target=thread_func)
+    #         dump_cache_thread.start()
 
 
 def cache(subsection):
@@ -65,8 +66,13 @@ def cache(subsection):
                         with open(cache_filename, "r", encoding="utf8") as file:
                             cache_data = json.load(file)
                     except Exception:
-                        os.replace(cache_filename, os.path.join(script_path, "tmp", "cache.json"))
-                        print('[ERROR] issue occurred while trying to read cache.json, move current cache to tmp/cache.json and create new cache')
+                        os.replace(
+                            cache_filename,
+                            os.path.join(script_path, "tmp", "cache.json"),
+                        )
+                        print(
+                            "[ERROR] issue occurred while trying to read cache.json, move current cache to tmp/cache.json and create new cache"
+                        )
                         cache_data = {}
 
     s = cache_data.get(subsection, {})
@@ -107,14 +113,14 @@ def cached_data_for_file(subsection, title, filename, func):
         if ondisk_mtime > cached_mtime:
             entry = None
 
-    if not entry or 'value' not in entry:
+    if not entry or "value" not in entry:
         value = func()
         if value is None:
             return None
 
-        entry = {'mtime': ondisk_mtime, 'value': value}
+        entry = {"mtime": ondisk_mtime, "value": value}
         existing_cache[title] = entry
 
         dump_cache()
 
-    return entry['value']
+    return entry["value"]

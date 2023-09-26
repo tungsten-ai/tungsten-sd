@@ -1,9 +1,10 @@
-import sys
 import contextlib
+import sys
 from functools import lru_cache
 
 import torch
-from modules import errors
+
+from modules import errors, shared
 
 if sys.platform == "darwin":
     from modules import mac_specific
@@ -17,8 +18,6 @@ def has_mps() -> bool:
 
 
 def get_cuda_device_string():
-    from modules import shared
-
     if shared.cmd_opts.device_id is not None:
         return f"cuda:{shared.cmd_opts.device_id}"
 
@@ -40,8 +39,6 @@ def get_optimal_device():
 
 
 def get_device_for(task):
-    from modules import shared
-
     if task in shared.cmd_opts.use_cpu:
         return cpu
 
@@ -49,7 +46,6 @@ def get_device_for(task):
 
 
 def torch_gc():
-
     if torch.cuda.is_available():
         with torch.cuda.device(get_cuda_device_string()):
             torch.cuda.empty_cache()
@@ -61,24 +57,29 @@ def torch_gc():
 
 def enable_tf32():
     if torch.cuda.is_available():
-
         # enabling benchmark option seems to enable a range of cards to do fp16 when they otherwise can't
         # see https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/4407
-        if any(torch.cuda.get_device_capability(devid) == (7, 5) for devid in range(0, torch.cuda.device_count())):
+        if any(
+            torch.cuda.get_device_capability(devid) == (7, 5)
+            for devid in range(0, torch.cuda.device_count())
+        ):
             torch.backends.cudnn.benchmark = True
 
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
 
-
 errors.run(enable_tf32, "Enabling TF32")
 
-cpu = torch.device("cpu")
-device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
-dtype = torch.float16
-dtype_vae = torch.float16
-dtype_unet = torch.float16
+cpu: torch.device = torch.device("cpu")
+device: torch.device = None
+device_interrogate: torch.device = None
+device_gfpgan: torch.device = None
+device_esrgan: torch.device = None
+device_codeformer: torch.device = None
+dtype: torch.dtype = torch.float16
+dtype_vae: torch.dtype = torch.float16
+dtype_unet: torch.dtype = torch.float16
 unet_needs_upcast = False
 
 
@@ -90,26 +91,10 @@ def cond_cast_float(input):
     return input.float() if unet_needs_upcast else input
 
 
-def randn(seed, shape):
-    from modules.shared import opts
-
-    torch.manual_seed(seed)
-    if opts.randn_source == "CPU" or device.type == 'mps':
-        return torch.randn(shape, device=cpu).to(device)
-    return torch.randn(shape, device=device)
-
-
-def randn_without_seed(shape):
-    from modules.shared import opts
-
-    if opts.randn_source == "CPU" or device.type == 'mps':
-        return torch.randn(shape, device=cpu).to(device)
-    return torch.randn(shape, device=device)
+nv_rng = None
 
 
 def autocast(disable=False):
-    from modules import shared
-
     if disable:
         return contextlib.nullcontext()
 
@@ -120,7 +105,11 @@ def autocast(disable=False):
 
 
 def without_autocast(disable=False):
-    return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() and not disable else contextlib.nullcontext()
+    return (
+        torch.autocast("cuda", enabled=False)
+        if torch.is_autocast_enabled() and not disable
+        else contextlib.nullcontext()
+    )
 
 
 class NansException(Exception):
@@ -128,8 +117,6 @@ class NansException(Exception):
 
 
 def test_for_nans(x, where):
-    from modules import shared
-
     if shared.cmd_opts.disable_nan_check:
         return
 
@@ -140,7 +127,7 @@ def test_for_nans(x, where):
         message = "A tensor with all NaNs was produced in Unet."
 
         if not shared.cmd_opts.no_half:
-            message += " This could be either because there's not enough precision to represent the picture, or because your video card does not support half type. Try setting the \"Upcast cross attention layer to float32\" option in Settings > Stable Diffusion or using the --no-half commandline argument to fix this."
+            message += ' This could be either because there\'s not enough precision to represent the picture, or because your video card does not support half type. Try setting the "Upcast cross attention layer to float32" option in Settings > Stable Diffusion or using the --no-half commandline argument to fix this.'
 
     elif where == "vae":
         message = "A tensor with all NaNs was produced in VAE."

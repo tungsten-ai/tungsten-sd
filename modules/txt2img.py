@@ -12,8 +12,21 @@ SD_AVAILABLE_IMG_SIZES = [
     for scale_factor in SD_SCALE_FACTORS
 ]
 
-SDXL_GENERATED_IMG_SIZES = [640, 768, 832, 896, 1024, 1152, 1216, 1344, 1536]
-SDXL_SCALE_FACTORS = range(3)
+SDXL_GENERATED_IMG_SIZES = [
+    640,
+    768,
+    832,
+    880,
+    896,
+    1024,
+    1152,
+    1168,
+    1216,
+    1280,
+    1344,
+    1536,
+]
+SDXL_SCALE_FACTORS = range(1, 3)
 SDXL_AVAILABLE_IMG_SIZES = [
     size * scale_factor
     for size in SDXL_GENERATED_IMG_SIZES
@@ -36,13 +49,11 @@ def txt2img(
     clip_skip: bool,
     controlnet_pose_image: Optional[Image] = None,
     controlnet_depth_image: Optional[Image] = None,
+    controlnet_reference_only_image: Optional[Image] = None,
     loras: Optional[List[Tuple[str, float]]] = None,
-    default_negative_prompt_chunks: Optional[
-        List[Union[str, Tuple[str, float]]]
-    ] = None,
-    default_positive_prompt_chunks: Optional[
-        List[Union[str, Tuple[str, float]]]
-    ] = None,
+    trigger_words: Optional[List[str]] = None,
+    extra_negative_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
+    extra_positive_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
 ) -> List[Image]:
     from modules import prompt_utils, scripts, shared
     from modules.processing import StableDiffusionProcessingTxt2Img, process_images
@@ -50,34 +61,24 @@ def txt2img(
 
     global upscaler
 
-    use_controlnet = bool(controlnet_pose_image or controlnet_depth_image)
+    controlnet_counts = sum(
+        cn is not None
+        for cn in [
+            controlnet_pose_image,
+            controlnet_depth_image,
+            controlnet_reference_only_image,
+        ]
+    )
+    use_controlnet = controlnet_counts > 0
 
-    # Modify prompt
-    if loras:
-        for lora_keyword, _ in loras:
-            prompt = prompt_utils.suppress_lora_keyword(lora_keyword, prompt)
-        for lora_keyword, lora_weight in loras:
-            prompt += f", <lora:{lora_keyword}:{lora_weight}>"
-
-    if default_positive_prompt_chunks:
-        for embedding in default_positive_prompt_chunks:
-            prompt = prompt_utils.suppress_plain_keyword(
-                embedding if isinstance(embedding, str) else embedding[0], prompt
-            )
-        for embedding in default_positive_prompt_chunks:
-            prompt += (
-                f", {embedding}"
-                if isinstance(embedding, str)
-                else f", ({embedding[0]}:{embedding[1]})"
-            )
-
-    if default_negative_prompt_chunks:
-        for embedding in default_negative_prompt_chunks:
+    # Modify positive/negative prompts
+    if extra_negative_prompt_chunks:
+        for embedding in extra_negative_prompt_chunks:
             negative_prompt = prompt_utils.suppress_plain_keyword(
                 embedding if isinstance(embedding, str) else embedding[0],
                 negative_prompt,
             )
-        for embedding in default_negative_prompt_chunks:
+        for embedding in extra_negative_prompt_chunks:
             negative_prompt_increment = (
                 embedding
                 if isinstance(embedding, str)
@@ -88,6 +89,29 @@ def txt2img(
             else:
                 negative_prompt = negative_prompt_increment
 
+    if trigger_words:
+        for word in trigger_words:
+            prompt = prompt_utils.suppress_plain_keyword(word, prompt)
+            prompt = word + prompt
+
+    if extra_positive_prompt_chunks:
+        for embedding in extra_positive_prompt_chunks:
+            prompt = prompt_utils.suppress_plain_keyword(
+                embedding if isinstance(embedding, str) else embedding[0], prompt
+            )
+        for embedding in extra_positive_prompt_chunks:
+            prompt += (
+                f", {embedding}"
+                if isinstance(embedding, str)
+                else f", ({embedding[0]}:{embedding[1]})"
+            )
+
+    if loras:
+        for lora_keyword, _ in loras:
+            prompt = prompt_utils.suppress_lora_keyword(lora_keyword, prompt)
+        for lora_keyword, lora_weight in loras:
+            prompt += f", <lora:{lora_keyword}:{lora_weight}>"
+
     # Upscaler config
     (gen_width, gen_height), scale_factor = _get_generated_image_size_and_scale_factor(
         shared.sd_model, width, height
@@ -95,6 +119,8 @@ def txt2img(
 
     # Prepare processing
     shared.opts.set("CLIP_stop_at_last_layers", 2 if clip_skip else 1)
+    # print("Full positive prompt:", prompt)
+    # print("Full negative prompt", negative_prompt)
     processing = StableDiffusionProcessingTxt2Img(
         sd_model=shared.sd_model,
         prompt=prompt,
@@ -118,8 +144,10 @@ def txt2img(
                 {
                     "enabled": True,
                     "module": "openpose",
-                    "model": "controlnet11Models_openpose",
-                    "weight": 0.5 if controlnet_depth_image else 1.0,
+                    "model": "controlnetxlCNXL_tencentarcOpenpose"
+                    if shared.sd_model.is_sdxl
+                    else "controlnet11Models_openpose",
+                    "weight": 1.0 / controlnet_counts,
                     "image": {
                         "image": np.array(
                             controlnet_pose_image.to_pil_image("RGB")
@@ -146,8 +174,10 @@ def txt2img(
                 {
                     "enabled": True,
                     "module": "depth",
-                    "model": "controlnet11Models_depth",
-                    "weight": 0.5 if controlnet_pose_image else 1.0,
+                    "model": "controlnetxlCNXL_tencentarcDepthMidas"
+                    if shared.sd_model.is_sdxl
+                    else "controlnet11Models_depth",
+                    "weight": 1.0 / controlnet_counts,
                     "image": {
                         "image": np.array(
                             controlnet_depth_image.to_pil_image("RGB")
@@ -169,17 +199,42 @@ def txt2img(
                     "loopback": False,
                 }
             )
+        if controlnet_reference_only_image:
+            print(controlnet_counts)
+            processing.script_args.append(
+                {
+                    "enabled": True,
+                    "module": "reference_only",
+                    "model": None,
+                    "weight": 1.0 / controlnet_counts,
+                    "image": {
+                        "image": np.array(
+                            controlnet_reference_only_image.to_pil_image("RGB")
+                        ).astype("uint8"),
+                        "mask": None,
+                    },
+                    "resize_mode": "Crop and Resize",
+                    "lowvram": False,
+                    "processor_res": -1,
+                    "threshold_a": 0.5,
+                    "threshold_b": -1,
+                    "guidance_start": 0.0,
+                    "guidance_end": 1.0,
+                    "control_mode": "Balanced",
+                    "pixel_perfect": False,
+                    "input_mode": "simple",
+                    "batch_images": "",
+                    "output_dir": "",
+                    "loopback": False,
+                }
+            )
 
     # Do processing
     processed = process_images(processing)
 
     processing.close()
 
-    generated_pil_images = processed.images
-    if controlnet_pose_image:
-        generated_pil_images = generated_pil_images[:-1]
-    if controlnet_depth_image:
-        generated_pil_images = generated_pil_images[:-1]
+    generated_pil_images = processed.images[:batch_size]
 
     # Upscale
     if scale_factor > 1:

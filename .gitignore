@@ -171,3 +171,4 @@ cython_debug/
 /cache.json
 /cache.json.lock
 /venv_download
+_internal*

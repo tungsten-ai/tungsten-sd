@@ -120,10 +120,9 @@ cmd_opts.disable_extension_access = (
 ) = (
     devices.cpu
     if any(y in cmd_opts.use_cpu for y in [x, "all"])
-    else devices.get_optimal_device()
+    else torch.device("cuda:0")
     for x in ["sd", "interrogate", "gfpgan", "esrgan", "codeformer"]
 )
-
 devices.dtype = torch.float32 if cmd_opts.no_half else torch.float16
 devices.dtype_vae = (
     torch.float32 if cmd_opts.no_half or cmd_opts.no_half_vae else torch.float16
@@ -833,10 +832,10 @@ options_templates.update(
                 "triggers when a tensor with NaNs is produced in VAE; disabling the option in this case will result in a black square image"
             ),
             "randn_source": OptionInfo(
-                "GPU",
+                "NV",
                 "Random number generator source.",
                 gr.Radio,
-                {"choices": ["GPU", "CPU"]},
+                {"choices": ["GPU", "CPU", "NV"]},
             ).info(
                 "changes seeds drastically; use CPU to produce the same picture across different videocard vendors"
             ),
@@ -914,6 +913,9 @@ options_templates.update(
             "experimental_persistent_cond_cache": OptionInfo(
                 False, "persistent cond cache"
             ).info("Experimental, keep cond caches across jobs, reduce overhead."),
+            "batch_cond_uncond": OptionInfo(True, "Batch cond/uncond").info(
+                "do both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed; previously this was controlled by --always-batch-cond-uncond comandline argument"
+            ),
         },
     )
 )
@@ -1223,7 +1225,7 @@ options_templates.update(
         {
             "show_progressbar": OptionInfo(True, "Show progressbar"),
             "live_previews_enable": OptionInfo(
-                True, "Show live previews of the created image"
+                False, "Show live previews of the created image"
             ),
             "live_previews_image_format": OptionInfo(
                 "png",
@@ -1232,10 +1234,10 @@ options_templates.update(
                 {"choices": ["jpeg", "png", "webp"]},
             ),
             "show_progress_grid": OptionInfo(
-                True, "Show previews of all images generated in a batch as a grid"
+                False, "Show previews of all images generated in a batch as a grid"
             ),
             "show_progress_every_n_steps": OptionInfo(
-                10,
+                100000,
                 "Live preview display period",
                 gr.Slider,
                 {"minimum": -1, "maximum": 32, "step": 1},
@@ -1338,6 +1340,14 @@ options_templates.update(
             ).link(
                 "PR",
                 "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/6044",
+            ),
+            "sgm_noise_multiplier": OptionInfo(False, "SGM noise multiplier")
+            .link(
+                "PR",
+                "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/12818",
+            )
+            .info(
+                "Match initial noise to official SDXL implementation - only useful for reproducing images"
             ),
             "uni_pc_variant": OptionInfo(
                 "bh1",

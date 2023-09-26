@@ -1,5 +1,6 @@
 import collections
 import gc
+import hashlib
 import os.path
 import re
 import sys
@@ -324,6 +325,8 @@ def read_state_dict(checkpoint_file, print_global_state=False, map_location=None
 
 
 def get_checkpoint_state_dict(checkpoint_info: CheckpointInfo, timer):
+    print("Loading weights from disk...")
+
     sd_model_hash = checkpoint_info.calculate_shorthash()
     timer.record("calculate hash")
 
@@ -333,10 +336,11 @@ def get_checkpoint_state_dict(checkpoint_info: CheckpointInfo, timer):
         return checkpoints_loaded[checkpoint_info]
 
     weights_path = Path(checkpoint_info.filename)
-    print(f"Loading weights: {weights_path.name}")
+    # print(f"Loading weights: {weights_path.name}")
     res = read_state_dict(checkpoint_info.filename)
     timer.record("load weights from disk")
 
+    print("Done.")
     return res
 
 
@@ -346,18 +350,25 @@ def load_model_weights(model, checkpoint_info: CheckpointInfo, state_dict, timer
 
     shared.opts.data["sd_model_checkpoint"] = checkpoint_info.title
 
-    if state_dict is None:
-        state_dict = get_checkpoint_state_dict(checkpoint_info, timer)
+    # if state_dict is None:
+    #     state_dict = get_checkpoint_state_dict(checkpoint_info, timer)
 
     model.is_sdxl = hasattr(model, "conditioner")
     model.is_sd2 = not model.is_sdxl and hasattr(model.cond_stage_model, "model")
     model.is_sd1 = not model.is_sdxl and not model.is_sd2
 
     if model.is_sdxl:
+        print("Extending sdxl...")
         sd_models_xl.extend_sdxl(model)
+        print("Done.")
 
-    model.load_state_dict(state_dict, strict=False)
+    print("Applying weights to model (load state dict)...")
+    weights_path = Path(checkpoint_info.filename)
+    # model.load_state_dict(state_dict, strict=False)
+    safetensors.torch.load_model(model, weights_path, strict=False)
+
     del state_dict
+    print("Done.")
     timer.record("apply weights to model")
 
     if shared.opts.sd_checkpoint_cache > 0:
@@ -607,14 +618,16 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
 
     timer.record("create model")
 
+    sd_model.to(shared.device)
+    timer.record("move model to device")
     load_model_weights(sd_model, checkpoint_info, state_dict, timer)
 
-    if shared.cmd_opts.lowvram or shared.cmd_opts.medvram:
-        lowvram.setup_for_low_vram(sd_model, shared.cmd_opts.medvram)
-    else:
-        sd_model.to(shared.device)
+    # if shared.cmd_opts.lowvram or shared.cmd_opts.medvram:
+    #     lowvram.setup_for_low_vram(sd_model, shared.cmd_opts.medvram)
+    # else:
+    #     sd_model.to(shared.device)
 
-    timer.record("move model to device")
+    # timer.record("move model to device")
 
     sd_hijack.model_hijack.hijack(sd_model)
 

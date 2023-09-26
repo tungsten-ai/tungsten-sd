@@ -1,18 +1,18 @@
+import inspect
 import os
 import re
 import sys
-import inspect
 from collections import namedtuple
 
 from modules import (
     errors,
+    extensions,
     paths,
     script_callbacks,
     script_loading,
     scripts_postprocessing,
     shared,
     timer,
-    extensions,
 )
 
 AlwaysVisible = object()
@@ -239,6 +239,7 @@ class Script:
         """
         pass
 
+
 current_basedir = paths.script_path
 
 
@@ -268,7 +269,6 @@ def list_scripts(scriptdirname, extension):
             scripts_list.append(
                 ScriptFile(paths.script_path, filename, os.path.join(basedir, filename))
             )
-
 
     for ext in extensions.active():
         scripts_list += ext.list_files(scriptdirname, extension)
@@ -459,10 +459,13 @@ class ScriptRunner:
     def after_extra_networks_activate(self, p, **kwargs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.after_extra_networks_activate(p, *script_args, **kwargs)
             except Exception:
-                errors.report(f"Error running after_extra_networks_activate: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running after_extra_networks_activate: {script.filename}",
+                    exc_info=True,
+                )
 
     def process_batch(self, p, **kwargs):
         for script in self.alwayson_scripts:
@@ -497,10 +500,13 @@ class ScriptRunner:
     def postprocess_batch_list(self, p, pp: PostprocessBatchListArgs, **kwargs):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.postprocess_batch_list(p, pp, *script_args, **kwargs)
             except Exception:
-                errors.report(f"Error running postprocess_batch_list: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running postprocess_batch_list: {script.filename}",
+                    exc_info=True,
+                )
 
     def postprocess_image(self, p, pp: PostprocessImageArgs):
         for script in self.alwayson_scripts:
@@ -548,14 +554,15 @@ class ScriptRunner:
                     self.scripts[si].args_from = args_from
                     self.scripts[si].args_to = args_to
 
-
     def before_hr(self, p):
         for script in self.alwayson_scripts:
             try:
-                script_args = p.script_args[script.args_from:script.args_to]
+                script_args = p.script_args[script.args_from : script.args_to]
                 script.before_hr(p, *script_args)
             except Exception:
-                errors.report(f"Error running before_hr: {script.filename}", exc_info=True)
+                errors.report(
+                    f"Error running before_hr: {script.filename}", exc_info=True
+                )
 
 
 scripts_txt2img: ScriptRunner = None
