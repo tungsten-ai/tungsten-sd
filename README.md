@@ -13,7 +13,13 @@ Using this template, you can create a Tungsten model including followings:
 - [Docker](https://docs.docker.com/get-docker/)
 
 ## Create Stable Diffusion model in Tungsten
-### Step 0: Install Tungstenkit
+### Step 0: Clone this repository
+```
+git clone --recursive https://github.com/tungsten-ai/tungsten-sd.git
+cd tungsten-sd
+```
+
+### Step 1: Install Tungstenkit
 
 First, install [Tungstenkit](https://github.com/tungsten-ai/tungstenkit):
 
@@ -21,22 +27,22 @@ First, install [Tungstenkit](https://github.com/tungsten-ai/tungstenkit):
 pip install tungstenkit
 ```
 
-### Step 1. Prepare weights
+### Step 2. Prepare weights
 Put your Stable Diffusion model weights to ``models/Stable-diffusion``.
 
 If you want to have your own LoRA and VAE, refer to [advanced configuration](#advanced-configuration).
 
-### Step 2. Build model
+### Step 3. Build model
 
 ```bash
 tungsten build . -n tungsten-stable-diffusion
 ```
 
-### Step 3: Create a project on Tungsten
+### Step 4: Create a project on Tungsten
 
 Go to [tungsten.run](https://tungsten.run/new) and create a project.
 
-### Step 4: Push the model to Tungsten
+### Step 5: Push the model to Tungsten
 
 Log in to Tungsten:
 
@@ -55,7 +61,7 @@ Then, push the model to the project:
 tungsten push <YOUR_PROJECT_NAME>
 ```
 
-### Step 5: Run the model on Tungsten
+### Step 6: Run the model on Tungsten
 
 Visit [tungsten.run](https://tungsten.run) and go to the project page.
 
