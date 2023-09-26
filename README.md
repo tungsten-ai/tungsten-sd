@@ -2,9 +2,11 @@
 This repository is for creating your own Tungsten model with a custom stable diffusion checkpoint. 
 
 Using this template, you can create a Tungsten model including followings:
-- Basic functionalities in [automatic1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (e.g. prompt syntax & Real-ESRGAN upscaler)
+- Basic functionalities in [automatic1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (e.g. prompt syntax)
+- Upscaler (Real-ESRGAN)
 - ControlNet - reference only, openpose & depth (currently available only for non-XL models)
 - LoRA
+- Default prompt and negative prompt
 
 ## Prerequisites
 
@@ -73,3 +75,9 @@ Visit [tungsten.run](https://tungsten.run) and go to the project page.
 
 ### VAE
 Put your VAE model weights to ``models/VAE``
+
+### Prompt customization
+Modify following functions in ``tungsten_model.py``:
+- ``StableDiffusion.get_trigger_words`` - Add trigger word at the start of the prompt
+- ``StableDiffusion.get_extra_prompt_chunks`` - Add extra prompt chunks at the end of the prompt
+- ``StableDiffusion.get_extra_negative_prompt_chunks`` - Add extra negative prompt chunks at the end of the prompt
