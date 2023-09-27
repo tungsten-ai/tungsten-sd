@@ -78,6 +78,6 @@ Put your VAE model weights to ``models/VAE``.
 
 ### Prompt customization
 Modify following functions in ``tungsten_model.py``:
-- ``StableDiffusion.get_trigger_words`` - Add trigger word at the start of the prompt.
+- ``StableDiffusion.get_trigger_words`` - Add trigger words at the start of the prompt.
 - ``StableDiffusion.get_extra_prompt_chunks`` - Add extra prompt chunks at the end of the prompt.
 - ``StableDiffusion.get_extra_negative_prompt_chunks`` - Add extra negative prompt chunks at the end of the negative prompt.
