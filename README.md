@@ -1,7 +1,7 @@
 # Tungsten Stable Diffusion Template
-This repository is for creating your own Tungsten model with a custom stable diffusion checkpoint. 
+This repository is for creating your own Tungsten model with a stable diffusion checkpoint. 
 
-Using this template, you can create a Tungsten model including followings:
+Using this template, you can create a Stable Diffusion model in tungsten including followings:
 - Basic functionalities in [automatic1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (e.g. prompt syntax)
 - Upscaler (Real-ESRGAN)
 - ControlNet - reference only, openpose & depth (currently available only for non-XL models)
@@ -14,7 +14,7 @@ Using this template, you can create a Tungsten model including followings:
 - [Python 3.7+](https://www.python.org/downloads/)
 - [Docker](https://docs.docker.com/get-docker/)
 
-## Create Stable Diffusion model in Tungsten
+## Create your Stable Diffusion model in Tungsten
 ### Step 0: Clone this repository
 ```
 git clone --recursive https://github.com/tungsten-ai/tungsten-sd.git
@@ -68,16 +68,16 @@ tungsten push <YOUR_PROJECT_NAME>
 Visit [tungsten.run](https://tungsten.run) and go to the project page.
 
 
-## Advanced Configuration
+## Advanced configuration
 ### LoRA
 1. Put your LoRA model weights to ``models/Lora``.
-2. Modify ``StableDiffusion.get_loras`` function in ``tungsten_model.py`` to adjust lora magnitude
+2. Modify ``StableDiffusion.get_loras`` function in ``tungsten_model.py`` to adjust the lora magnitude.
 
 ### VAE
-Put your VAE model weights to ``models/VAE``
+Put your VAE model weights to ``models/VAE``.
 
 ### Prompt customization
 Modify following functions in ``tungsten_model.py``:
-- ``StableDiffusion.get_trigger_words`` - Add trigger word at the start of the prompt
-- ``StableDiffusion.get_extra_prompt_chunks`` - Add extra prompt chunks at the end of the prompt
-- ``StableDiffusion.get_extra_negative_prompt_chunks`` - Add extra negative prompt chunks at the end of the negative prompt
+- ``StableDiffusion.get_trigger_words`` - Add trigger word at the start of the prompt.
+- ``StableDiffusion.get_extra_prompt_chunks`` - Add extra prompt chunks at the end of the prompt.
+- ``StableDiffusion.get_extra_negative_prompt_chunks`` - Add extra negative prompt chunks at the end of the negative prompt.
