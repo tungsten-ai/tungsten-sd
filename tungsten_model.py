@@ -207,7 +207,9 @@ class Output(BaseIO):
         "embeddings",
         "check_if_sdxl.py",
     ],
-    exclude_files=["models/ControlNet*"] if IS_SDXL else [],
+    exclude_files=["models/ControlNet*", "extensions/sd-webui-animatediff"]
+    if IS_SDXL
+    else ["extensions/sd-webui-animatediff"],
     base_image="mjpyeon/tungsten-sd-base:v1",
 )
 class StableDiffusion:
