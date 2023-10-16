@@ -136,7 +136,8 @@ def initialize(vae_file_path, *, is_sdxl, default_sampler):
     t.record("wait for loading model")
 
     if vae_file_path:
-        load_vae(vae_file_path)
+        load_vae(shared.sd_model, vae_file_path)
+        print(f"Using custom VAE: {vae_file_path}")
         t.record("load vae")
 
     modules.script_callbacks.before_ui_callback()

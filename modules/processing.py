@@ -21,18 +21,8 @@ import modules.sd_hijack
 import modules.sd_models as sd_models
 import modules.sd_vae as sd_vae
 import modules.shared as shared
-from modules import (
-    devices,
-    errors,
-    extra_networks,
-    lowvram,
-    prompt_parser,
-    rng,
-    scripts,
-    sd_samplers,
-    sd_unet,
-    sd_vae_approx,
-)
+from modules import (devices, errors, extra_networks, lowvram, prompt_parser,
+                     rng, scripts, sd_samplers, sd_unet, sd_vae_approx)
 from modules.rng import slerp  # noqa: F401
 from modules.sd_hijack import model_hijack
 from modules.shared import cmd_opts, opts, state
