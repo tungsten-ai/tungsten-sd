@@ -76,6 +76,10 @@ Visit [tungsten.run](https://tungsten.run) and go to the project page.
 ### VAE
 Put your VAE model weights to ``models/VAE``.
 
+### Embedding
+1. Put your embedding files to ``embeddings``.
+2. Customize prompt (see [Prompt customization](#prompt-customization))
+
 ### Prompt customization
 Modify following functions in ``tungsten_model.py``:
 - ``StableDiffusion.get_trigger_words`` - Add trigger words at the start of the prompt.
