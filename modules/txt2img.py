@@ -51,7 +51,7 @@ def txt2img(
     controlnet_depth_image: Optional[Image] = None,
     controlnet_reference_only_image: Optional[Image] = None,
     loras: Optional[List[Tuple[str, float]]] = None,
-    trigger_words: Optional[List[str]] = None,
+    trigger_words: Optional[List[Union[str, Tuple[str, float]]]] = None,
     extra_negative_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
     extra_positive_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
 ) -> List[Image]:
@@ -91,8 +91,12 @@ def txt2img(
 
     if trigger_words:
         for word in trigger_words:
-            prompt = prompt_utils.suppress_plain_keyword(word, prompt)
-            prompt = word + prompt
+            prompt = prompt_utils.suppress_plain_keyword(
+                word if isinstance(word, str) else word[0], prompt
+            )
+            prompt = (
+                f"{word}, " if isinstance(word, str) else f"({word[0]}:{word[1]}), "
+            ) + prompt
 
     if extra_positive_prompt_chunks:
         for embedding in extra_positive_prompt_chunks:

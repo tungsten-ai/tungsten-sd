@@ -279,15 +279,21 @@ class StableDiffusion:
         The LoRA weight file named LORA_FILE_NAME should exist in `models/LoRA` directory.
 
         Examples:
-          - `[("add_detail", 0.5)]` -> Put `<lora:add_detail:0.5>` to the prompt.
-          - `[("add_detail", input.detail)]` -> Put `<lora:add_detail:{detail field in input}>` to the prompt. # noqa: E501
+          - `[("add_detail", 0.5)]` -> Put `<lora:add_detail:0.5>` at the end of the prompt.
+          - `[("add_detail", input.detail)]` -> Put `<lora:add_detail:{detail field in input}>` at the end of the prompt. # noqa: E501
         """
 
         return []
 
-    def get_trigger_words(self, input: BaseInput) -> List[str]:
+    def get_trigger_words(
+        self, input: BaseInput
+    ) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare trigger words to be inserted at the start of the prompt.
+
+        Examples:
+          - `["trigger1"]` -> Put `<lora:add_detail:0.5>` at the start of the prompt.
+          - `[("trigger2", input.magnitude)]` -> Put `(trigger2:{magnitude field in input})` at the start of the prompt. # noqa: E501
         """
 
         return []
@@ -301,8 +307,8 @@ class StableDiffusion:
         Using this, you can use textual inversion.
 
         Examples
-          - `["hello"]` -> Put `hello` to the prompt (w/ whitespace if required).
-          - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the prompt.
+          - `["hello"]` -> Put `hello` to the prompt.
+          - `[("hello", 1.1)]` -> Put `(hello:1.1)` at the end of the prompt.
         """
 
         return []
