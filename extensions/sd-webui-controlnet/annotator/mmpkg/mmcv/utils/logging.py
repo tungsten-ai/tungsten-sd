@@ -95,15 +95,16 @@ def print_log(msg, logger=None, level=logging.INFO):
         level (int): Logging level. Only available when `logger` is a Logger
             object or "root".
     """
-    if logger is None:
-        print(msg)
-    elif isinstance(logger, logging.Logger):
-        logger.log(level, msg)
-    elif logger == 'silent':
-        pass
-    elif isinstance(logger, str):
-        _logger = get_logger(logger)
-        _logger.log(level, msg)
+    print(msg)
+    # if logger is None:
+    #     print(msg)
+    # elif isinstance(logger, logging.Logger):
+    #     logger.log(level, msg)
+    # elif logger == 'silent':
+    #     pass
+    # elif isinstance(logger, str):
+    #     _logger = get_logger(logger)
+    #     _logger.log(level, msg)
     else:
         raise TypeError(
             'logger should be either a logging.Logger object, str, '

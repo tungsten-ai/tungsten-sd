@@ -1,24 +1,24 @@
-import torch
-import os
-import functools
-import time
 import base64
-import numpy as np
+import functools
 import logging
-
+import os
+import time
 from typing import Any, Callable, Dict
+
+import numpy as np
+import safetensors.torch
+import torch
+from scripts.logging import logger
+
+from modules.safe import unsafe_torch_load
 
 
 def load_state_dict(ckpt_path, location="cpu"):
     _, extension = os.path.splitext(ckpt_path)
     if extension.lower() == ".safetensors":
-        import safetensors.torch
-
         state_dict = safetensors.torch.load_file(ckpt_path, device=location)
     else:
-        state_dict = get_state_dict(
-            torch.load(ckpt_path, map_location=torch.device(location))
-        )
+        state_dict = unsafe_torch_load(ckpt_path, map_location=torch.device(location))
     state_dict = get_state_dict(state_dict)
     print(f"Loaded state_dict from [{ckpt_path}]")
     return state_dict
@@ -82,7 +82,8 @@ def ndarray_lru_cache(max_size: int = 128, typed: bool = False):
 
 def timer_decorator(func):
     """Time the decorated function and output the result to debug logger."""
-    return func
+    if logger.level != logging.DEBUG:
+        return func
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -92,15 +93,16 @@ def timer_decorator(func):
         duration = end_time - start_time
         # Only report function that are significant enough.
         if duration > 1e-3:
-            print(f"{func.__name__} ran in: {duration} sec")
+            logger.debug(f"{func.__name__} ran in: {duration} sec")
         return result
 
     return wrapper
 
 
 class TimeMeta(type):
-    """ Metaclass to record execution time on all methods of the
-    child class. """
+    """Metaclass to record execution time on all methods of the
+    child class."""
+
     def __new__(cls, name, bases, attrs):
         for attr_name, attr_value in attrs.items():
             if callable(attr_value):
@@ -112,8 +114,9 @@ class TimeMeta(type):
 svgsupport = False
 try:
     import io
-    from svglib.svglib import svg2rlg
+
     from reportlab.graphics import renderPM
+    from svglib.svglib import svg2rlg
 
     svgsupport = True
 except ImportError:

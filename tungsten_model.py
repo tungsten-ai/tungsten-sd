@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple, Union
 from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
 
 from check_if_sdxl import check_if_sdxl
-from modules.initialize import initialize
+from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.txt2img import txt2img
 
 VAE_FILE_PATHS = glob("models/VAE/*")
@@ -16,44 +16,6 @@ MODEL_FILES = glob("models/Stable-diffusion/*.safetensors")
 assert len(MODEL_FILES) > 0, "Stable diffusion checkpoint not found"
 IS_SDXL = check_if_sdxl(MODEL_FILES[0])
 
-SD_OUTPUT_DIMS = [
-    "512x512",
-    "512x768",
-    "768x512",
-    "1024x1024",
-    "1024x1536",
-    "1536x1024",
-    "1536x1536",
-    "1536x2304",
-    "2304x1536",
-    "2048x2048",
-    "2048x3072",
-    "3072x2048",
-]
-SDXL_OUTPUT_DIMS = [
-    "1024x1024",
-    "1168x880",
-    "896x1152",
-    "1216x832",
-    "832x1216",
-    "1280x768",
-    "768x1280",
-    "1344x768",
-    "768x1344",
-    "1536x640",
-    "640x1536",
-    "2048x2048",
-    "2304x1792",
-    "1792x2304",
-    "2432x1664",
-    "1664x2432",
-    "2560x1536",
-    "1536x2560",
-    "2688x1536",
-    "1536x2688",
-    "3072x1280",
-    "1280x3072",
-]
 SAMPLERS = [
     "DPM++ 2M Karras",
     "DPM++ SDE Karras",
@@ -83,34 +45,43 @@ SAMPLERS = [
     "DPM++ 2S a Karras",
     "Restart",
 ]
-DEFAULT_SAMPLER = "DPM++ SDE Karras"
+SD_VAES_IN_BASE_IMAGE = [
+    "vae-ft-mse-840000-ema-pruned_fp16.safetensors",
+    "orangemix.vae.pt",
+    "kl-f8-anime2_fp16.safetensors",
+    "anything_fp16.safetensors",
+    "blessed2_fp16.safetensors",
+    "clearvae_v2.3_fp16.safetensors",
+]
+SDXL_VAES_IN_BASE_IMAGE = [
+    "sdxl_vae.safetensors",
+]
+ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
+    "models/VAE/" + vae_name
+    for vae_name in (SDXL_VAES_IN_BASE_IMAGE if IS_SDXL else SD_VAES_IN_BASE_IMAGE)
+    if vae_name not in [p.split("/")[-1] for p in VAE_FILE_PATHS]
+]
+
+DEFAULT_SAMPLER = "Restart"
 
 
-class BaseInput(BaseIO):
+class Input(BaseIO):
     prompt: str = Field(description="Input prompt")
     negative_prompt: str = Option(
         description="Specify things to not see in the output",
         default="",
     )
-
-
-class SDInput(BaseInput):
-    reference_image: Optional[Image] = Option(
-        description="Image that the output should be similar to",
-        default=None,
+    width: int = Option(
+        description="Output image width",
+        default=768 if IS_SDXL else 512,
+        ge=512,
+        le=2048 if IS_SDXL else 1024,
     )
-    reference_pose_image: Optional[Image] = Option(
-        description="Image with a reference pose",
-        default=None,
-    )
-    reference_depth_image: Optional[Image] = Option(
-        description="Image with a reference depth",
-        default=None,
-    )
-    image_dimensions: str = Option(
-        default=SD_OUTPUT_DIMS[0],
-        description="Pixel dimensions of output image (width x height)",
-        choices=SD_OUTPUT_DIMS,
+    height: int = Option(
+        description="Output image height",
+        default=1344 if IS_SDXL else 768,
+        ge=512,
+        le=2048 if IS_SDXL else 1024,
     )
     num_outputs: int = Option(
         description="Number of output images",
@@ -119,10 +90,40 @@ class SDInput(BaseInput):
         default=1,
     )
     seed: int = Option(
-        description="Random seed. Set as -1 to randomize the seed",
+        description="Random seed. Set as -1 to randomize output.",
         default=-1,
         ge=-1,
         le=4294967293,
+    )
+    reference_image: Optional[Image] = Option(
+        description="Image that the output should be similar to",
+        default=None,
+    )
+    reference_image_strength: float = Option(
+        description="Strength of applying reference_image. Used only when reference_image is given.",
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+    )
+    reference_pose_image: Optional[Image] = Option(
+        description="Image with a reference pose",
+        default=None,
+    )
+    reference_pose_strength: float = Option(
+        description="Strength of applying reference_pose_image. Used only when reference_pose_image is given.",  # noqa: E501
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+    )
+    reference_depth_image: Optional[Image] = Option(
+        description="Image with a reference depth",
+        default=None,
+    )
+    reference_depth_strength: float = Option(
+        description="Strength of applying reference_depth_image. Used only when reference_depth_image is given.",  # noqa: E501
+        default=1.0,
+        ge=0.0,
+        le=2.0,
     )
     sampler: str = Option(
         default=DEFAULT_SAMPLER,
@@ -137,50 +138,40 @@ class SDInput(BaseInput):
     )
     clip_skip: bool = Option(
         description="Whether to ignore the last layer of CLIP network or not",
-        default=True,
+        default=not IS_SDXL,
     )
-    lora: Optional[Binary] = Option(
-        description="LoRA file. You can apply and adjust the magnitude by putting the following to the prompt: <lora:[FILE_NAME]:[MAGNITUDE]>",  # noqa: E501
+    vae: str = Option(
+        description="Select VAE",
+        default=VAE_FILE_PATHS[0].split("/")[-1] if VAE_FILE_PATHS else "None",
+        choices=["None"] + [vae_path.split("/")[-1] for vae_path in ALL_VAE_FILE_PATHS],
+    )
+    lora_1: Optional[Binary] = Option(
+        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
         default=None,
     )
-
-
-class SDXLInput(BaseInput):
-    image_dimensions: str = Option(
-        default=SDXL_OUTPUT_DIMS[0],
-        description="Pixel dimensions of output image (width x height)",
-        choices=SDXL_OUTPUT_DIMS,
-    )
-    num_outputs: int = Option(
-        description="Number of output images",
-        le=3,
-        ge=1,
-        default=1,
-    )
-    seed: int = Option(
-        description="Random seed. Set as -1 to randomize the seed",
-        default=-1,
-        ge=-1,
-        le=4294967293,
-    )
-    sampler: str = Option(
-        default=DEFAULT_SAMPLER,
-        choices=SAMPLERS,
-        description="Sampler type",
-    )
-    samping_steps: int = Option(
-        description="Number of denoising steps", ge=1, le=100, default=20
-    )
-    cfg_scale: float = Option(
-        description="Scale for classifier-free guidance", ge=1, le=20, default=7
-    )
-    clip_skip: bool = Option(
-        description="Whether to ignore the last layer of CLIP network or not",
-        default=True,
-    )
-    lora: Optional[Binary] = Option(
-        description="LoRA file. You can apply and adjust the magnitude by putting the following to the prompt: <lora:[FILE_NAME]:[MAGNITUDE]>",  # noqa: E501
+    lora_2: Optional[Binary] = Option(
+        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
         default=None,
+    )
+    lora_3: Optional[Binary] = Option(
+        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
+        default=None,
+    )
+    embedding_1: Optional[Binary] = Option(
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        default=None,
+    )
+    embedding_2: Optional[Binary] = Option(
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        default=None,
+    )
+    embedding_3: Optional[Binary] = Option(
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        default=None,
+    )
+    disable_prompt_modification: bool = Option(
+        description="Disable automatically adding suggested prompt modification. Built-in LoRAs and trigger words will remain.",  # noqa: E501
+        default=False,
     )
 
 
@@ -189,7 +180,7 @@ class Output(BaseIO):
 
 
 @define_model(
-    input=SDXLInput if IS_SDXL else SDInput,
+    input=Input,
     output=Output,
     batch_size=1,
     gpu=True,
@@ -197,7 +188,7 @@ class Output(BaseIO):
     include_files=[
         "configs",
         "extensions-builtin",
-        "extensions",
+        "extensions/sd-webui-controlnet",
         "localizations",
         "models/Stable-diffusion",
         "models/VAE",
@@ -207,72 +198,77 @@ class Output(BaseIO):
         "embeddings",
         "check_if_sdxl.py",
     ],
-    exclude_files=["models/ControlNet*", "extensions/sd-webui-animatediff"]
-    if IS_SDXL
-    else ["extensions/sd-webui-animatediff"],
-    base_image="mjpyeon/tungsten-sd-base:v1",
+    base_image="mjpyeon/tungsten-sd-base:v2",
 )
 class StableDiffusion:
     def setup(self):
         initialize(
-            vae_file_path=VAE_FILE_PATHS[0] if VAE_FILE_PATHS else None,
             is_sdxl=IS_SDXL,
             default_sampler=DEFAULT_SAMPLER,
         )
-        input_cls = SDXLInput if IS_SDXL else SDInput
-        dummy_input = input_cls(
+        initialize_vae()
+        dummy_input = Input(
             prompt="dummy",
             samping_steps=1,
         )
         self.predict([dummy_input])
 
-    def predict(self, inputs: List[BaseInput]) -> List[Output]:
+    def predict(self, inputs: List[Input]) -> List[Output]:
         input = inputs[0]
 
-        # Put extra lora to its directory
-        if input.lora is not None:
-            shutil.move(input.lora.path, "models/Lora")
+        # Put extra loras and embeddings to its directory
+        loras: List[Path] = []
+        embeddings: List[Path] = []
         try:
-            # Output image size
-            width, height = [int(d) for d in input.image_dimensions.split("x")]
+            _prepare_loras_and_embeddings(input, loras, embeddings)
 
             # Assign random seed
             if input.seed == -1:
                 input.seed = random.randrange(4294967294)
                 print(f"Using seed {input.seed}\n")
 
-            # Generate image
-            images = txt2img(
-                prompt=input.prompt,
-                negative_prompt=input.negative_prompt,
-                seed=float(input.seed),
-                sampler_name=input.sampler,
-                batch_size=input.num_outputs,
-                steps=input.samping_steps,
-                cfg_scale=input.cfg_scale,
-                width=width,
-                height=height,
-                clip_skip=input.clip_skip,
-                loras=self.get_loras(input),
-                trigger_words=self.get_trigger_words(input),
-                extra_positive_prompt_chunks=self.get_extra_prompt_chunks(input),
-                extra_negative_prompt_chunks=self.get_extra_negative_prompt_chunks(
-                    input
-                ),
-                controlnet_pose_image=None if IS_SDXL else input.reference_pose_image,
-                controlnet_depth_image=None if IS_SDXL else input.reference_depth_image,
-                controlnet_reference_only_image=None
-                if IS_SDXL
-                else input.reference_image,
+            load_vae_weights(
+                os.path.join("models", "VAE", input.vae)
+                if input.vae != "None"
+                else None
             )
+            try:
+                # Generate image
+                images = txt2img(
+                    prompt=input.prompt,
+                    negative_prompt=input.negative_prompt,
+                    seed=float(input.seed),
+                    sampler_name=input.sampler,
+                    batch_size=input.num_outputs,
+                    steps=input.samping_steps,
+                    cfg_scale=input.cfg_scale,
+                    width=input.width,
+                    height=input.height,
+                    clip_skip=input.clip_skip,
+                    loras=self.get_loras(input),
+                    trigger_words=self.get_trigger_words(input),
+                    extra_positive_prompt_chunks=[]
+                    if input.disable_prompt_modification
+                    else self.get_extra_prompt_chunks(input),
+                    extra_negative_prompt_chunks=[]
+                    if input.disable_prompt_modification
+                    else self.get_extra_negative_prompt_chunks(input),
+                    controlnet_pose_image=input.reference_pose_image,
+                    controlnet_depth_image=input.reference_depth_image,
+                    controlnet_reference_only_image=input.reference_image,
+                    controlnet_pose_weight=input.reference_pose_strength,
+                    controlnet_depth_weight=input.reference_depth_strength,
+                    controlnet_reference_only_weight=input.reference_image_strength,
+                )
 
-            return [Output(images=images)]
+                return [Output(images=images)]
+            finally:
+                initialize_vae()
 
         finally:
-            if input.lora is not None:
-                os.remove(Path("models/Lora") / input.lora.path.parts[-1])
+            _cleanup_loras_and_embeddings(loras, embeddings)
 
-    def get_loras(self, input: BaseInput) -> List[Tuple[str, float]]:
+    def get_loras(self, input: Input) -> List[Tuple[str, float]]:
         """
         Declare LoRAs to use in the format of (LORA_FILE_NAME, WEIGHT).
 
@@ -285,9 +281,7 @@ class StableDiffusion:
 
         return []
 
-    def get_trigger_words(
-        self, input: BaseInput
-    ) -> List[Union[str, Tuple[str, float]]]:
+    def get_trigger_words(self, input: Input) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare trigger words to be inserted at the start of the prompt.
 
@@ -299,7 +293,7 @@ class StableDiffusion:
         return []
 
     def get_extra_prompt_chunks(
-        self, input: BaseInput
+        self, input: Input
     ) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare default prompt chunks.
@@ -314,7 +308,7 @@ class StableDiffusion:
         return []
 
     def get_extra_negative_prompt_chunks(
-        self, input: BaseInput
+        self, input: Input
     ) -> List[Union[str, Tuple[str, float]]]:
         """
         Declare default negative prompt chunks.
@@ -326,3 +320,50 @@ class StableDiffusion:
           - `[("hello", 1.1), "world"]` -> Put `(hello:1.1), world` to the negative prompt.
         """
         return []
+
+
+def _prepare_loras_and_embeddings(
+    input: Input, loras_list: List[Path], embeddings_list: List[Path]
+):
+    loras_dir_path = Path("models/Lora")
+    embeddings_dir_path = Path("embeddings")
+
+    loras_list.extend(
+        [
+            lora.path
+            for lora in [
+                getattr(input, field_name)
+                for field_name in input.__fields__.keys()
+                if field_name.startswith("lora_")
+            ]
+            if lora is not None and not (loras_dir_path / lora.path.parts[-1]).exists()
+        ]
+    )
+    embeddings_list.extend(
+        [
+            embedding.path
+            for embedding in [
+                getattr(input, field_name)
+                for field_name in input.__fields__.keys()
+                if field_name.startswith("embedding_")
+            ]
+            if embedding is not None
+            and not (embeddings_dir_path / embedding.path.parts[-1]).exists()
+        ]
+    )
+
+    for lora_path in loras_list:
+        shutil.move(lora_path, loras_dir_path)
+    for embedding_path in embeddings_list:
+        shutil.move(embedding_path, embeddings_dir_path)
+
+
+def _cleanup_loras_and_embeddings(loras_list: List[Path], embeddings_list: List[Path]):
+    loras_dir_path = Path("models/Lora")
+    embeddings_dir_path = Path("embeddings")
+    for lora_path in loras_list:
+        if (loras_dir_path / lora_path.parts[-1]).exists():
+            os.remove(loras_dir_path / lora_path.parts[-1])
+    for embedding_path in embeddings_list:
+        if (embeddings_dir_path / embedding_path.parts[-1]).exists():
+            os.remove(embeddings_dir_path / embedding_path.parts[-1])

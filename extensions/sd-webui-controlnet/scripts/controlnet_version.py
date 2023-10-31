@@ -1,4 +1,4 @@
-version_flag = 'v1.1.237'
+version_flag = "v1.1.411"
 
 print(f"ControlNet {version_flag}")
 # A smart trick to know if user has updated as well as if user has restarted terminal.

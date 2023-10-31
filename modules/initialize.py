@@ -11,9 +11,17 @@ os.environ["SAFETENSORS_FAST_GPU"] = "1"
 warnings.filterwarnings("ignore")
 
 
-def initialize(vae_file_path, *, is_sdxl, default_sampler):
+def initialize(*, is_sdxl, default_sampler):
     if is_sdxl:
-        sys.argv.extend(["--xformers", "--no-half-vae", "--no-hashing"])
+        sys.argv.extend(
+            [
+                "--xformers",
+                "--no-half-vae",
+                "--controlnet-dir=models/ControlNet",
+                "--controlnet-annotator-models-path=models/ControlNetAnnotators",
+                "--no-hashing",
+            ]
+        )
     else:
         sys.argv.extend(
             [
@@ -135,11 +143,6 @@ def initialize(vae_file_path, *, is_sdxl, default_sampler):
     th_initialize_scripts.join()
     t.record("wait for loading model")
 
-    if vae_file_path:
-        load_vae(shared.sd_model, vae_file_path)
-        print(f"Using custom VAE: {vae_file_path}")
-        t.record("load vae")
-
     modules.script_callbacks.before_ui_callback()
     t.record("init callbacks")
 
@@ -212,3 +215,19 @@ def initialize(vae_file_path, *, is_sdxl, default_sampler):
 
     print(f"Setup done in {t.summary()}")
     # print(torch.backends.cudnn.benchmark)
+
+
+def load_vae_weights(vae_file_path):
+    from modules import shared
+    from modules.sd_vae import load_vae
+
+    if vae_file_path:
+        load_vae(shared.sd_model, vae_file_path)
+
+
+def initialize_vae():
+    from modules import shared
+    from modules.sd_vae import clear_loaded_vae, restore_base_vae
+
+    clear_loaded_vae()
+    restore_base_vae(shared.sd_model)

@@ -1,12 +1,12 @@
 from enum import Enum
-from typing import List, Any, Optional, Union, Tuple, Dict
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
-from modules import scripts, processing, shared
+from scripts.logging import logger
+from scripts.processor import model_free_preprocessors, preprocessor_sliders_config
+
+from modules import processing, scripts, shared
 from scripts import global_state
-from scripts.processor import preprocessor_sliders_config, model_free_preprocessors
-import base64
-from PIL import Image
-from io import BytesIO
 
 
 def get_api_version() -> int:
@@ -43,10 +43,10 @@ class ResizeMode(Enum):
 
 
 resize_mode_aliases = {
-    'Inner Fit (Scale to Fit)': 'Crop and Resize',
-    'Outer Fit (Shrink to Fit)': 'Resize and Fill',
-    'Scale to Fit (Inner Fit)': 'Crop and Resize',
-    'Envelope (Outer Fit)': 'Resize and Fill',
+    "Inner Fit (Scale to Fit)": "Crop and Resize",
+    "Outer Fit (Shrink to Fit)": "Resize and Fill",
+    "Scale to Fit (Inner Fit)": "Crop and Resize",
+    "Envelope (Outer Fit)": "Resize and Fill",
 }
 
 
@@ -59,7 +59,9 @@ def resize_mode_from_value(value: Union[str, int, ResizeMode]) -> ResizeMode:
             return ResizeMode.RESIZE
 
         if value >= len(ResizeMode):
-            print(f'Unrecognized ResizeMode int value {value}. Fall back to RESIZE.')
+            logger.warning(
+                f"Unrecognized ResizeMode int value {value}. Fall back to RESIZE."
+            )
             return ResizeMode.RESIZE
 
         return [e for e in ResizeMode][value]
@@ -87,10 +89,10 @@ def visualize_inpaint_mask(img):
 
 
 def pixel_perfect_resolution(
-        image: np.ndarray,
-        target_H: int,
-        target_W: int,
-        resize_mode: ResizeMode,
+    image: np.ndarray,
+    target_H: int,
+    target_W: int,
+    resize_mode: ResizeMode,
 ) -> int:
     """
     Calculate the estimated resolution for resizing an image while preserving aspect ratio.
@@ -126,6 +128,14 @@ def pixel_perfect_resolution(
     else:
         estimation = max(k0, k1) * float(min(raw_H, raw_W))
 
+    logger.debug(f"Pixel Perfect Computation:")
+    logger.debug(f"resize_mode = {resize_mode}")
+    logger.debug(f"raw_H = {raw_H}")
+    logger.debug(f"raw_W = {raw_W}")
+    logger.debug(f"target_H = {target_H}")
+    logger.debug(f"target_W = {target_W}")
+    logger.debug(f"estimation = {estimation}")
+
     return int(np.round(estimation))
 
 
@@ -139,22 +149,22 @@ class ControlNetUnit:
     """
 
     def __init__(
-            self,
-            enabled: bool = True,
-            module: Optional[str] = None,
-            model: Optional[str] = None,
-            weight: float = 1.0,
-            image: Optional[InputImage] = None,
-            resize_mode: Union[ResizeMode, int, str] = ResizeMode.INNER_FIT,
-            low_vram: bool = False,
-            processor_res: int = -1,
-            threshold_a: float = -1,
-            threshold_b: float = -1,
-            guidance_start: float = 0.0,
-            guidance_end: float = 1.0,
-            pixel_perfect: bool = False,
-            control_mode: Union[ControlMode, int, str] = ControlMode.BALANCED,
-            **_kwargs,
+        self,
+        enabled: bool = True,
+        module: Optional[str] = None,
+        model: Optional[str] = None,
+        weight: float = 1.0,
+        image: Optional[InputImage] = None,
+        resize_mode: Union[ResizeMode, int, str] = ResizeMode.INNER_FIT,
+        low_vram: bool = False,
+        processor_res: int = -1,
+        threshold_a: float = -1,
+        threshold_b: float = -1,
+        guidance_start: float = 0.0,
+        guidance_end: float = 1.0,
+        pixel_perfect: bool = False,
+        control_mode: Union[ControlMode, int, str] = ControlMode.BALANCED,
+        **_kwargs,
     ):
         self.enabled = enabled
         self.module = module
@@ -178,28 +188,19 @@ class ControlNetUnit:
         return vars(self) == vars(other)
 
 
-def to_base64_nparray(encoding: str):
-    """
-    Convert a base64 image into the image type the extension uses
-    """
-
-    def decode_base64_to_image(encoding):
-        if encoding.startswith("data:image/"):
-            encoding = encoding.split(";")[1].split(",")[1]
-
-        image = Image.open(BytesIO(base64.b64decode(encoding)))
-        return image
-
-    return np.array(decode_base64_to_image(encoding)).astype('uint8')
-
-
-def get_all_units_in_processing(p: processing.StableDiffusionProcessing) -> List[ControlNetUnit]:
+def get_all_units_in_processing(
+    p: processing.StableDiffusionProcessing,
+) -> List[ControlNetUnit]:
     """
     Fetch ControlNet processing units from a StableDiffusionProcessing.
     """
+
     return get_all_units(p.scripts, p.script_args)
 
-def get_all_units(script_runner: scripts.ScriptRunner, script_args: List[Any]) -> List[ControlNetUnit]:
+
+def get_all_units(
+    script_runner: scripts.ScriptRunner, script_args: List[Any]
+) -> List[ControlNetUnit]:
     """
     Fetch ControlNet processing units from an existing script runner.
     Use this function to fetch units from the list of all scripts arguments.
@@ -207,7 +208,8 @@ def get_all_units(script_runner: scripts.ScriptRunner, script_args: List[Any]) -
 
     cn_script = find_cn_script(script_runner)
     if cn_script:
-        return get_all_units_from(script_args[cn_script.args_from:cn_script.args_to])
+        return get_all_units_from(script_args[cn_script.args_from : cn_script.args_to])
+
     return []
 
 
@@ -218,23 +220,20 @@ def get_all_units_from(script_args: List[Any]) -> List[ControlNetUnit]:
     """
 
     def is_stale_unit(script_arg: Any) -> bool:
-        """ Returns whether the script_arg is potentially an stale version of
+        """Returns whether the script_arg is potentially an stale version of
         ControlNetUnit created before module reload."""
-        return (
-                'ControlNetUnit' in type(script_arg).__name__ and
-                not isinstance(script_arg, ControlNetUnit)
+        return "ControlNetUnit" in type(script_arg).__name__ and not isinstance(
+            script_arg, ControlNetUnit
         )
 
     def is_controlnet_unit(script_arg: Any) -> bool:
-        """ Returns whether the script_arg is ControlNetUnit or anything that
-        can be treated like ControlNetUnit. """
-        return (
-                isinstance(script_arg, (ControlNetUnit, dict)) or
-                (
-                        hasattr(script_arg, '__dict__') and
-                        set(vars(ControlNetUnit()).keys()).issubset(
-                            set(vars(script_arg).keys()))
-                )
+        """Returns whether the script_arg is ControlNetUnit or anything that
+        can be treated like ControlNetUnit."""
+        return isinstance(script_arg, (ControlNetUnit, dict)) or (
+            hasattr(script_arg, "__dict__")
+            and set(vars(ControlNetUnit()).keys()).issubset(
+                set(vars(script_arg).keys())
+            )
         )
 
     all_units = [
@@ -243,14 +242,24 @@ def get_all_units_from(script_args: List[Any]) -> List[ControlNetUnit]:
         if is_controlnet_unit(script_arg)
     ]
     if not all_units:
-        print(
+        logger.warning(
             "No ControlNetUnit detected in args. It is very likely that you are having an extension conflict."
-            f"Here are args received by ControlNet: {script_args}.")
+            f"Here are args received by ControlNet: {script_args}."
+        )
+    if any(is_stale_unit(script_arg) for script_arg in script_args):
+        logger.debug(
+            "Stale version of ControlNetUnit detected. The ControlNetUnit received"
+            "by ControlNet is created before the newest load of ControlNet extension."
+            "They will still be used by ControlNet as long as they provide same fields"
+            "defined in the newest version of ControlNetUnit."
+        )
 
     return all_units
 
 
-def get_single_unit_from(script_args: List[Any], index: int = 0) -> Optional[ControlNetUnit]:
+def get_single_unit_from(
+    script_args: List[Any], index: int = 0
+) -> Optional[ControlNetUnit]:
     """
     Fetch a single ControlNet processing unit from ControlNet script arguments.
     The list must not contain script positional arguments. It must only contain processing units.
@@ -272,7 +281,7 @@ def get_max_models_num():
     Fetch the maximum number of allowed ControlNet models.
     """
 
-    max_models_num = shared.opts.data.get("control_net_max_models_num", 1)
+    max_models_num = shared.opts.data.get("control_net_unit_count", 3)
     return max_models_num
 
 
@@ -283,26 +292,33 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
     """
 
     ext_compat_keys = {
-        'guessmode': 'guess_mode',
-        'guidance': 'guidance_end',
-        'lowvram': 'low_vram',
-        'input_image': 'image'
+        "guessmode": "guess_mode",
+        "guidance": "guidance_end",
+        "lowvram": "low_vram",
+        "input_image": "image",
     }
 
     if isinstance(unit, dict):
         unit = {ext_compat_keys.get(k, k): v for k, v in unit.items()}
 
         mask = None
-        if 'mask' in unit:
-            mask = unit['mask']
-            del unit['mask']
+        if "mask" in unit:
+            mask = unit["mask"]
+            del unit["mask"]
 
-        if 'image' in unit and not isinstance(unit['image'], dict):
-            unit['image'] = {'image': unit['image'], 'mask': mask} if mask is not None else unit['image'] if unit[
-                'image'] else None
+        if "image" in unit and not isinstance(unit["image"], dict):
+            unit["image"] = (
+                {"image": unit["image"], "mask": mask}
+                if mask is not None
+                else unit["image"]
+                if unit["image"]
+                else None
+            )
 
-        if 'guess_mode' in unit:
-            print('Guess Mode is removed since 1.1.136. Please use Control Mode instead.')
+        if "guess_mode" in unit:
+            logger.warning(
+                "Guess Mode is removed since 1.1.136. Please use Control Mode instead."
+            )
 
         unit = ControlNetUnit(**unit)
 
@@ -312,9 +328,9 @@ def to_processing_unit(unit: Union[Dict[str, Any], ControlNetUnit]) -> ControlNe
 
 
 def update_cn_script_in_processing(
-        p: processing.StableDiffusionProcessing,
-        cn_units: List[ControlNetUnit],
-        **_kwargs,  # for backwards compatibility
+    p: processing.StableDiffusionProcessing,
+    cn_units: List[ControlNetUnit],
+    **_kwargs,  # for backwards compatibility
 ):
     """
     Update the arguments of the ControlNet script in `p.script_args` in place, reading from `cn_units`.
@@ -326,16 +342,16 @@ def update_cn_script_in_processing(
     """
 
     cn_units_type = type(cn_units) if type(cn_units) in (list, tuple) else list
-    script_args = list(p.script_args)
+    script_args = p.script_args_value
     update_cn_script_in_place(p.scripts, script_args, cn_units)
     p.script_args = cn_units_type(script_args)
 
 
 def update_cn_script_in_place(
-        script_runner: scripts.ScriptRunner,
-        script_args: List[Any],
-        cn_units: List[ControlNetUnit],
-        **_kwargs,  # for backwards compatibility
+    script_runner: scripts.ScriptRunner,
+    script_args: List[Any],
+    cn_units: List[ControlNetUnit],
+    **_kwargs,  # for backwards compatibility
 ):
     """
     Update the arguments of the ControlNet script in `script_args` in place, reading from `cn_units`.
@@ -351,14 +367,18 @@ def update_cn_script_in_place(
         return
 
     # fill in remaining parameters to satisfy max models, just in case script needs it.
-    max_models = shared.opts.data.get("control_net_max_models_num", 1)
-    cn_units = cn_units + [ControlNetUnit(enabled=False)] * max(max_models - len(cn_units), 0)
+    max_models = shared.opts.data.get("control_net_unit_count", 3)
+    cn_units = cn_units + [ControlNetUnit(enabled=False)] * max(
+        max_models - len(cn_units), 0
+    )
 
     cn_script_args_diff = 0
     for script in script_runner.alwayson_scripts:
         if script is cn_script:
-            cn_script_args_diff = len(cn_units) - (cn_script.args_to - cn_script.args_from)
-            script_args[script.args_from:script.args_to] = cn_units
+            cn_script_args_diff = len(cn_units) - (
+                cn_script.args_to - cn_script.args_from
+            )
+            script_args[script.args_from : script.args_to] = cn_units
             script.args_to = script.args_from + len(cn_units)
         else:
             script.args_from += cn_script_args_diff
@@ -392,7 +412,9 @@ def get_modules(alias_names: bool = False) -> List[str]:
     modules = list(global_state.cn_preprocessor_modules.keys())
 
     if alias_names:
-        modules = [global_state.preprocessor_aliases.get(module, module) for module in modules]
+        modules = [
+            global_state.preprocessor_aliases.get(module, module) for module in modules
+        ]
 
     return modules
 
@@ -415,13 +437,10 @@ def get_modules_detail(alias_names: bool = False) -> Dict[str, Any]:
         if _module_list[index] in preprocessor_sliders_config:
             _module_detail[module] = {
                 "model_free": module in model_free_preprocessors,
-                "sliders": preprocessor_sliders_config[_module_list[index]]
+                "sliders": preprocessor_sliders_config[_module_list[index]],
             }
         else:
-            _module_detail[module] = {
-                "model_free": False,
-                "sliders": []
-            }
+            _module_detail[module] = {"model_free": False, "sliders": []}
 
     return _module_detail
 
@@ -437,11 +456,11 @@ def find_cn_script(script_runner: scripts.ScriptRunner) -> Optional[scripts.Scri
     for script in script_runner.alwayson_scripts:
         if is_cn_script(script):
             return script
-        
+
 
 def is_cn_script(script: scripts.Script) -> bool:
     """
     Determine whether `script` is a ControlNet script.
     """
 
-    return script.title().lower() == 'controlnet'
+    return script.title().lower() == "controlnet"

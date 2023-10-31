@@ -40,7 +40,6 @@ def delete_base_vae():
 def restore_base_vae(model):
     global loaded_vae_file
     if base_vae is not None and checkpoint_info == model.sd_checkpoint_info:
-        print("Restoring base VAE")
         _load_vae_dict(model, base_vae)
         loaded_vae_file = None
     delete_base_vae()
@@ -141,14 +140,12 @@ def load_vae(model, vae_file=None, vae_source="from unknown source"):
     if vae_file:
         if cache_enabled and vae_file in checkpoints_loaded:
             # use vae checkpoint cache
-            print(f"Loading VAE weights {vae_source}: cached {get_filename(vae_file)}")
+            print(f"Loading VAE weights: cached {get_filename(vae_file)}")
             store_base_vae(model)
             _load_vae_dict(model, checkpoints_loaded[vae_file])
         else:
-            assert os.path.isfile(
-                vae_file
-            ), f"VAE {vae_source} doesn't exist: {vae_file}"
-            print(f"Loading VAE weights {vae_source}: {vae_file}")
+            assert os.path.isfile(vae_file), f"VAE doesn't exist: {vae_file}"
+            print(f"Loading VAE weight: {vae_file}")
             store_base_vae(model)
 
             vae_dict_1 = load_vae_dict(
