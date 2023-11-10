@@ -6,13 +6,16 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
-from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
-
 from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.txt2img import txt2img
+from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
 
-VAE_FILE_PATHS = glob("models/VAE/*.safetensors") + glob("models/VAE/*.pt") + glob("models/VAE/*.ckpt")
+VAE_FILE_PATHS = (
+    glob("models/VAE/*.safetensors")
+    + glob("models/VAE/*.pt")
+    + glob("models/VAE/*.ckpt")
+)
 SD_FILE_PATHS = glob("models/Stable-diffusion/*.safetensors")
 assert len(SD_FILE_PATHS) > 0, "Stable diffusion checkpoint not found"
 IS_SDXL = check_if_sdxl(SD_FILE_PATHS[0])
@@ -61,7 +64,7 @@ LORAS_IN_BASE_IMAGE = {
     "detail": "add-detail-xl" if IS_SDXL else "add_detail",
     "brightness": "TLS" if IS_SDXL else "add_brightness",
     "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
-    "saturation": None if IS_SDXL else "add_saturation"
+    "saturation": None if IS_SDXL else "add_saturation",
 }
 ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     "models/VAE/" + vae_name
@@ -79,29 +82,29 @@ class Input(BaseIO):
         default="",
     )
     detail: float = Option(
-        description="Enhance/diminish detail while keeping the overall style/character", 
-        default=0., 
-        le=2., 
-        ge=-2.,
+        description="Enhance/diminish detail while keeping the overall style/character",
+        default=0.0,
+        le=2.0,
+        ge=-2.0,
     )
     brightness: float = Option(
-        description="Adjust brightness", 
-        default=0., 
-        le=1.5 if IS_SDXL else 2., 
-        ge=-1.5 if IS_SDXL else -2.,
+        description="Adjust brightness",
+        default=0.0,
+        le=1.5 if IS_SDXL else 2.0,
+        ge=-1.5 if IS_SDXL else -2.0,
     )
     contrast: float = Option(
-        description="Adjust contrast", 
-        default=0., 
-        le=1.5 if IS_SDXL else 5., 
-        ge=-1. if IS_SDXL else -5.,
+        description="Adjust contrast",
+        default=0.0,
+        le=1.5 if IS_SDXL else 5.0,
+        ge=-1.0 if IS_SDXL else -5.0,
     )
     if not IS_SDXL:
         saturation: float = Option(
             description="Adjust saturation",
-            default=0.,
-            le=3.,
-            ge=-3.,
+            default=0.0,
+            le=3.0,
+            ge=-3.0,
         )
     num_outputs: int = Option(
         description="Number of output images",
@@ -282,7 +285,8 @@ class StableDiffusion:
                     width=input.width,
                     height=input.height,
                     clip_skip=input.clip_skip,
-                    loras=self.get_loras(input) + [
+                    loras=self.get_loras(input)
+                    + [
                         (built_in_lora, getattr(input, field_name))
                         for field_name, built_in_lora in LORAS_IN_BASE_IMAGE.items()
                         if built_in_lora
@@ -397,7 +401,7 @@ def _prepare_dynamic_loras_and_embeddings(
         shutil.move(lora_path, loras_dir_path)
     for embedding_path in embeddings_list:
         shutil.move(embedding_path, embeddings_dir_path)
-    
+
     if loras_list:
         _save_hashes(Path("models/Lora"))
     if embeddings_list:
