@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 import shutil
@@ -11,10 +12,10 @@ from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.txt2img import txt2img
 
-VAE_FILE_PATHS = glob("models/VAE/*")
-MODEL_FILES = glob("models/Stable-diffusion/*.safetensors")
-assert len(MODEL_FILES) > 0, "Stable diffusion checkpoint not found"
-IS_SDXL = check_if_sdxl(MODEL_FILES[0])
+VAE_FILE_PATHS = glob("models/VAE/*.safetensors") + glob("models/VAE/*.pt") + glob("models/VAE/*.ckpt")
+SD_FILE_PATHS = glob("models/Stable-diffusion/*.safetensors")
+assert len(SD_FILE_PATHS) > 0, "Stable diffusion checkpoint not found"
+IS_SDXL = check_if_sdxl(SD_FILE_PATHS[0])
 
 SAMPLERS = [
     "DPM++ 2M Karras",
@@ -56,6 +57,12 @@ SD_VAES_IN_BASE_IMAGE = [
 SDXL_VAES_IN_BASE_IMAGE = [
     "sdxl_vae.safetensors",
 ]
+LORAS_IN_BASE_IMAGE = {
+    "detail": "add-detail-xl" if IS_SDXL else "add_detail",
+    "brightness": "TLS" if IS_SDXL else "add_brightness",
+    "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
+    "saturation": None if IS_SDXL else "add_saturation"
+}
 ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     "models/VAE/" + vae_name
     for vae_name in (SDXL_VAES_IN_BASE_IMAGE if IS_SDXL else SD_VAES_IN_BASE_IMAGE)
@@ -66,10 +73,47 @@ DEFAULT_SAMPLER = "Restart"
 
 
 class Input(BaseIO):
-    prompt: str = Field(description="Input prompt")
+    prompt: str = Field(description="Specify things to see in the output")
     negative_prompt: str = Option(
         description="Specify things to not see in the output",
         default="",
+    )
+    detail: float = Option(
+        description="Enhance/diminish detail while keeping the overall style/character", 
+        default=0., 
+        le=2., 
+        ge=-2.,
+    )
+    brightness: float = Option(
+        description="Adjust brightness", 
+        default=0., 
+        le=1.5 if IS_SDXL else 2., 
+        ge=-1.5 if IS_SDXL else -2.,
+    )
+    contrast: float = Option(
+        description="Adjust contrast", 
+        default=0., 
+        le=1.5 if IS_SDXL else 5., 
+        ge=-1. if IS_SDXL else -5.,
+    )
+    if not IS_SDXL:
+        saturation: float = Option(
+            description="Adjust saturation",
+            default=0.,
+            le=3.,
+            ge=-3.,
+        )
+    num_outputs: int = Option(
+        description="Number of output images",
+        le=8,
+        ge=1,
+        default=1,
+    )
+    seed: int = Option(
+        description="Same seed with the same prompt generates the same image. Set as -1 to randomize output.",
+        default=-1,
+        ge=-1,
+        le=4294967293,
     )
     width: int = Option(
         description="Output image width",
@@ -82,18 +126,6 @@ class Input(BaseIO):
         default=1344 if IS_SDXL else 768,
         ge=512,
         le=2048 if IS_SDXL else 1024,
-    )
-    num_outputs: int = Option(
-        description="Number of output images",
-        le=8,
-        ge=1,
-        default=1,
-    )
-    seed: int = Option(
-        description="Random seed. Set as -1 to randomize output.",
-        default=-1,
-        ge=-1,
-        le=4294967293,
     )
     reference_image: Optional[Image] = Option(
         description="Image that the output should be similar to",
@@ -146,27 +178,27 @@ class Input(BaseIO):
         choices=["None"] + [vae_path.split("/")[-1] for vae_path in ALL_VAE_FILE_PATHS],
     )
     lora_1: Optional[Binary] = Option(
-        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
+        description="LoRA file. Apply by writing the following in prompt: <lora:FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE>",  # noqa: E501
         default=None,
     )
     lora_2: Optional[Binary] = Option(
-        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
+        description="LoRA file. Apply by writing the following in prompt: <lora:FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE>",  # noqa: E501
         default=None,
     )
     lora_3: Optional[Binary] = Option(
-        description="LoRA file. Apply by writing the following in prompt: <lora:[FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE]>",  # noqa: E501
+        description="LoRA file. Apply by writing the following in prompt: <lora:FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE>",  # noqa: E501
         default=None,
     )
     embedding_1: Optional[Binary] = Option(
-        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: (FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE)",  # noqa: E501
         default=None,
     )
     embedding_2: Optional[Binary] = Option(
-        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: (FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE)",  # noqa: E501
         default=None,
     )
     embedding_3: Optional[Binary] = Option(
-        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: ([FILE_NAME_WITHOUT_EXTENSION]:[MAGNITUDE])",  # noqa: E501
+        description="Embedding file (textural inversion). Apply by writing the following in prompt or negative prompt: (FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE)",  # noqa: E501
         default=None,
     )
     disable_prompt_modification: bool = Option(
@@ -198,9 +230,14 @@ class Output(BaseIO):
         "embeddings",
         "check_if_sdxl.py",
     ],
-    base_image="mjpyeon/tungsten-sd-base:v2",
+    base_image="mjpyeon/tungsten-sd-base:v3",
 )
 class StableDiffusion:
+    @staticmethod
+    def post_build():
+        _save_hashes(Path("models"))
+        _save_hashes(Path("embeddings"))
+
     def setup(self):
         initialize(
             is_sdxl=IS_SDXL,
@@ -220,7 +257,7 @@ class StableDiffusion:
         loras: List[Path] = []
         embeddings: List[Path] = []
         try:
-            _prepare_loras_and_embeddings(input, loras, embeddings)
+            _prepare_dynamic_loras_and_embeddings(input, loras, embeddings)
 
             # Assign random seed
             if input.seed == -1:
@@ -233,7 +270,7 @@ class StableDiffusion:
                 else None
             )
             try:
-                # Generate image
+                # Generate images
                 images = txt2img(
                     prompt=input.prompt,
                     negative_prompt=input.negative_prompt,
@@ -245,7 +282,11 @@ class StableDiffusion:
                     width=input.width,
                     height=input.height,
                     clip_skip=input.clip_skip,
-                    loras=self.get_loras(input),
+                    loras=self.get_loras(input) + [
+                        (built_in_lora, getattr(input, field_name))
+                        for field_name, built_in_lora in LORAS_IN_BASE_IMAGE.items()
+                        if built_in_lora
+                    ],
                     trigger_words=self.get_trigger_words(input),
                     extra_positive_prompt_chunks=[]
                     if input.disable_prompt_modification
@@ -322,7 +363,7 @@ class StableDiffusion:
         return []
 
 
-def _prepare_loras_and_embeddings(
+def _prepare_dynamic_loras_and_embeddings(
     input: Input, loras_list: List[Path], embeddings_list: List[Path]
 ):
     loras_dir_path = Path("models/Lora")
@@ -356,14 +397,50 @@ def _prepare_loras_and_embeddings(
         shutil.move(lora_path, loras_dir_path)
     for embedding_path in embeddings_list:
         shutil.move(embedding_path, embeddings_dir_path)
+    
+    if loras_list:
+        _save_hashes(Path("models/Lora"))
+    if embeddings_list:
+        _save_hashes(Path("embeddings"))
 
 
 def _cleanup_loras_and_embeddings(loras_list: List[Path], embeddings_list: List[Path]):
     loras_dir_path = Path("models/Lora")
     embeddings_dir_path = Path("embeddings")
     for lora_path in loras_list:
-        if (loras_dir_path / lora_path.parts[-1]).exists():
+        lora_path_in_working_dir = loras_dir_path / lora_path.parts[-1]
+        if lora_path_in_working_dir.exists():
             os.remove(loras_dir_path / lora_path.parts[-1])
     for embedding_path in embeddings_list:
-        if (embeddings_dir_path / embedding_path.parts[-1]).exists():
+        embedding_path_in_working_dir = embeddings_dir_path / embedding_path.parts[-1]
+        if embedding_path_in_working_dir.exists():
             os.remove(embeddings_dir_path / embedding_path.parts[-1])
+
+
+def _save_hashes(base_dir: Path):
+    for p in base_dir.rglob("*"):
+        if p.is_dir():
+            _save_hashes(p)
+
+        p_hash = p.with_name(p.name + ".hash")
+
+        if not p.is_file():
+            continue
+
+        if p.name.endswith(".hash"):
+            continue
+
+        if p_hash.exists():
+            continue
+
+        p_hash.write_text(_compute_hash(p))
+
+
+def _compute_hash(p: Path):
+    blksize = 2 * 1024 * 1024
+    hash_sha256 = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(blksize), b""):
+            hash_sha256.update(chunk)
+
+    return hash_sha256.hexdigest()

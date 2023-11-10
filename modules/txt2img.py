@@ -1,4 +1,5 @@
-import itertools
+import os
+import shutil
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -27,7 +28,7 @@ def txt2img(
     extra_negative_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
     extra_positive_prompt_chunks: Optional[List[Union[str, Tuple[str, float]]]] = None,
 ) -> List[Image]:
-    from modules import prompt_utils, scripts, shared
+    from modules import images, prompt_utils, scripts, shared
     from modules.processing import StableDiffusionProcessingTxt2Img, process_images
 
     controlnet_counts = sum(
@@ -204,6 +205,21 @@ def txt2img(
 
     output_pil_images = processed.images[:batch_size]
 
-    images = [Image.from_pil_image(pil_img) for pil_img in output_pil_images]
+    # Save images with metadata
+    ret = []
+    if os.path.exists(".results"):
+        shutil.rmtree(".results")
+    os.mkdir(".results")
+    for i, pil_image in enumerate(output_pil_images):
+        saved_path, _ = images.save_image(
+            pil_image,
+            os.path.abspath(".results"),
+            "",
+            processing.seeds[i],
+            processing.prompts[i],
+            info=processed.infotexts[i],
+            p=processing,
+        )
+        ret.append(Image.from_path(saved_path))
 
-    return images
+    return ret

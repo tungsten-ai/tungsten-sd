@@ -1052,7 +1052,7 @@ options_templates.update(
                 "", "Extra networks tab order"
             ).needs_restart(),
             "textual_inversion_print_at_load": OptionInfo(
-                False, "Print a list of Textual Inversion embeddings when loading model"
+                True, "Print a list of Textual Inversion embeddings when loading model"
             ),
             "textual_inversion_add_hashes_to_infotext": OptionInfo(
                 True, "Add Textual Inversion hashes to infotext"

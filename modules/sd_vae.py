@@ -3,7 +3,7 @@ import glob
 import os
 from copy import deepcopy
 
-from modules import devices, paths, script_callbacks, sd_models, shared
+from modules import devices, hashes, paths, script_callbacks, sd_models, shared
 
 vae_path = os.path.abspath(os.path.join(paths.models_path, "VAE"))
 vae_ignore_keys = {"model_ema.decay", "model_ema.num_updates"}
@@ -15,6 +15,22 @@ loaded_vae_file = None
 checkpoint_info = None
 
 checkpoints_loaded = collections.OrderedDict()
+
+
+def get_loaded_vae_name():
+    if loaded_vae_file is None:
+        return None
+
+    return os.path.basename(loaded_vae_file)
+
+
+def get_loaded_vae_hash():
+    if loaded_vae_file is None:
+        return None
+
+    sha256 = hashes.sha256(loaded_vae_file, "vae")
+
+    return sha256[0:10] if sha256 else None
 
 
 def get_base_vae(model):

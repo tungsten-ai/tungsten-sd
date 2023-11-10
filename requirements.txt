@@ -28,6 +28,6 @@ lark==1.1.5
 tqdm==4.65.0                                                                                                                                                             
 clean-fid==0.1.35                                                                                                                                                        
 xformers==0.0.21                                                                                                                                                         
-tungstenkit==0.2.12
+tungstenkit==0.2.16
 torch==2.0.1+cu118
 torchvision==0.15.2+cu118

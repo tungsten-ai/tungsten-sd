@@ -146,75 +146,7 @@ def initialize(*, is_sdxl, default_sampler):
     modules.script_callbacks.before_ui_callback()
     t.record("init callbacks")
 
-    # occupy_mem(0)
-    # t.record("preoccupy GPU memory")
-
-    # print("Compiling computational graph of decoder...")
-    # shape = (1, 4, 160, 96) if is_sdxl else (1, 4, 1, 1)
-    # decode_first_stage(
-    #     shared.sd_model,
-    #     torch.rand(*shape).to(modules.devices.device).to(modules.devices.dtype_vae),
-    # )
-    # print("done.")
-    # t.record("compile decoder graph")
-
-    # print("Compiling computational graph of unet")
-    # p = modules.processing.StableDiffusionProcessingTxt2Img(
-    #     sd_model=shared.sd_model,
-    #     prompt="a",
-    #     negative_prompt="a",
-    #     seed=0,
-    #     sampler_name=default_sampler,
-    #     batch_size=1,
-    #     steps=1,
-    #     cfg_scale=7,
-    #     width=16,
-    #     height=16,
-    #     override_settings={},
-    # )
-    # # modules.processing.process_images(p)
-    # # p.close()
-    # with modules.devices.without_autocast() if modules.devices.unet_needs_upcast else modules.devices.autocast():
-    #     n = 0
-    #     p.all_seeds = p.all_subseeds = [0]
-    #     p.setup_prompts()
-    #     p.prompts = p.all_prompts[n * p.batch_size : (n + 1) * p.batch_size]
-    #     p.negative_prompts = p.all_negative_prompts[
-    #         n * p.batch_size : (n + 1) * p.batch_size
-    #     ]
-    #     p.seeds = p.all_seeds[n * p.batch_size : (n + 1) * p.batch_size]
-    #     p.subseeds = p.all_subseeds[n * p.batch_size : (n + 1) * p.batch_size]
-    #     opt_C = 4
-    #     opt_f = 8
-    #     p.rng = rng.ImageRNG(
-    #         (opt_C, p.height // opt_f, p.width // opt_f),
-    #         p.seeds,
-    #         subseeds=p.subseeds,
-    #         subseed_strength=p.subseed_strength,
-    #         seed_resize_from_h=p.seed_resize_from_h,
-    #         seed_resize_from_w=p.seed_resize_from_w,
-    #     )
-    #     with torch.no_grad(), p.sd_model.ema_scope():
-    #         with modules.devices.autocast():
-    #             p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
-    #             sd_unet.apply_unet()
-    #             p.parse_extra_network_prompts()
-    #             p.setup_conds()
-    #             p.sample(
-    #                 conditioning=p.c,
-    #                 unconditional_conditioning=p.uc,
-    #                 seeds=p.seeds,
-    #                 subseeds=p.subseeds,
-    #                 subseed_strength=p.subseed_strength,
-    #                 prompts=p.prompts,
-    #             )
-    #             p.close()
-
-    # print("done.")
-    # t.record("compile unet graph")
-
     print(f"Setup done in {t.summary()}")
-    # print(torch.backends.cudnn.benchmark)
 
 
 def load_vae_weights(vae_file_path):
