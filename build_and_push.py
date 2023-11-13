@@ -28,7 +28,13 @@ def build_and_push():
 
     # Get project name
     project_name = input("Enter project name: ")
+    if not project_name:
+        raise click.ClickException("Project name cannot be empty")
     _call_tungstenkit_cli(["project", "create", project_name, "--exists-ok"])
+    console.print()
+
+    # Get version
+    version = input("Enter version (press ENTER to skip): ")
     console.print()
 
     # Select checkpoint
@@ -189,6 +195,7 @@ def build_and_push():
 
         # Build
         tungsten_model_module_ref = tungsten_model_path.name.replace(".py", "")
+        full_model_name = f"{project_name}:{version}" if version else project_name
         console.print("Start building the model")
         _call_tungstenkit_cli(
             [
@@ -197,7 +204,7 @@ def build_and_push():
                 "-m",
                 tungsten_model_module_ref,
                 "-n",
-                project_name,
+                full_model_name,
             ]
         )
         try:
