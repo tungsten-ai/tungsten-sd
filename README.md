@@ -10,14 +10,14 @@ Using this template, you can create a Stable Diffusion model in tungsten includi
 
 ## For Windows
 1. Install [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
-2. Download `tungsten-sd-v0.1.0.zip` from [v0.1.0](https://github.com/tungsten-ai/tungsten-sd/releases/tag/v0.1.0) and extract its contents
-3. Run `download_code.bat`
+2. Download `tungsten-sd.zip` from [v0.1.0](https://github.com/tungsten-ai/tungsten-sd/releases/tag/v0.1.0) and extract its contents
+3. Run `update.bat`
 4. Put your SD files into following directories
     - Checkpoint: tungsten-sd/models/Stable-diffusion
     - LoRAs (optional): tungsten-sd/models/Lora
     - embeddings (optional): tungsten-sd/embeddings
     - VAE (optional): tungsten-sd/VAE
-5. Run `run.bat`
+5. Run `build_and_push.bat`
 
 ## For Linux
 
