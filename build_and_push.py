@@ -214,7 +214,7 @@ def build_and_push():
 
         finally:
             # Remove docker image
-            console.print("Removing model files stored in this machine...")
+            console.print("Removing model docker image stored in this machine...")
             _call_tungstenkit_cli(["clear", project_name])
 
     finally:
