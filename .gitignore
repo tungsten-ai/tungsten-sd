@@ -168,6 +168,7 @@ cython_debug/
 !/models/Stable-diffusion/.gitkeep 
 /models/huggingface/*
 /models/Lora/*
+!/models/Lora/.gitkeep
 /cache.json
 /cache.json.lock
 /venv_download
