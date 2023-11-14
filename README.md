@@ -13,10 +13,10 @@ Using this template, you can create a Stable Diffusion model in tungsten includi
 2. Download `tungsten-sd.zip` from [v0.1.0](https://github.com/tungsten-ai/tungsten-sd/releases/tag/v0.1.0) and extract its contents
 3. Run `update.bat`
 4. Put your SD files into following directories
-    - 1 Checkpoint: tungsten-sd/models/Stable-diffusion
-    - LoRAs (optional): tungsten-sd/models/Lora
-    - embeddings (optional): tungsten-sd/embeddings
-    - VAEs (optional): tungsten-sd/models/VAE
+    - 1 Checkpoint: `tungsten-sd/models/Stable-diffusion`
+    - LoRAs (optional): `tungsten-sd/models/Lora`
+    - embeddings (optional): `tungsten-sd/embeddings`
+    - VAEs (optional): `tungsten-sd/models/VAE`
 5. Run `build_and_push.bat` and enter the responses (e.g. username and password at [tungsten.run](https://tungsten.run)).
 
 ## For Linux
