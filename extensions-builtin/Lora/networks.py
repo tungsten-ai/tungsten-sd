@@ -292,7 +292,15 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
                         # inpainting model. zero pad updown to make channel[1]  4 to 9
                         updown = torch.nn.functional.pad(updown, (0, 0, 0, 0, 0, 5))
 
-                    self.weight += updown
+                    try:
+                        self.weight += updown
+                    except Exception as e:
+                        if self.weight.shape[1] == 2048 and updown.shape[1] == 768:
+                            raise RuntimeError("It is an SDXL model, but SD LoRA is provided.")
+                        elif self.weight.shape[1] == 768 and updown.shape[1] == 2048:
+                            raise RuntimeError("It is an SD model, but SDXL LoRA is provided.")
+                        else:
+                            raise e
                     continue
 
             module_q = net.modules.get(network_layer_name + "_q_proj", None)
