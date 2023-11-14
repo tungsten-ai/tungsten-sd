@@ -16,8 +16,8 @@ Using this template, you can create a Stable Diffusion model in tungsten includi
     - Checkpoint: tungsten-sd/models/Stable-diffusion
     - LoRAs (optional): tungsten-sd/models/Lora
     - embeddings (optional): tungsten-sd/embeddings
-    - VAE (optional): tungsten-sd/VAE
-5. Run `build_and_push.bat`
+    - VAE (optional): tungsten-sd/models/VAE
+5. Run `build_and_push.bat` and enter the responses (e.g. username and password at [tungsten.run](https://tungsten.run)).
 
 ## For Linux
 
