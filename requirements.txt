@@ -28,6 +28,10 @@ lark==1.1.5
 tqdm==4.65.0                                                                                                                                                             
 clean-fid==0.1.35                                                                                                                                                        
 xformers==0.0.21                                                                                                                                                         
-tungstenkit==0.2.16
+tungstenkit==0.2.18.post1
 torch==2.0.1+cu118
 torchvision==0.15.2+cu118
+blendmodes==2022
+ultralytics>=8.0.209
+mediapipe>=0.10.8
+rich>=13.0.0

@@ -229,23 +229,23 @@ def get_all_units_from(script_args: List[Any]) -> List[ControlNetUnit]:
     def is_controlnet_unit(script_arg: Any) -> bool:
         """Returns whether the script_arg is ControlNetUnit or anything that
         can be treated like ControlNetUnit."""
-        return isinstance(script_arg, (ControlNetUnit, dict)) or (
+        return isinstance(script_arg, ControlNetUnit) or (
             hasattr(script_arg, "__dict__")
             and set(vars(ControlNetUnit()).keys()).issubset(
                 set(vars(script_arg).keys())
-            )
-        )
+            ) 
+        ) or (isinstance(script_arg, dict) and "module" in script_arg and "enabled" in script_arg)
 
     all_units = [
         to_processing_unit(script_arg)
         for script_arg in script_args
         if is_controlnet_unit(script_arg)
     ]
-    if not all_units:
-        logger.warning(
-            "No ControlNetUnit detected in args. It is very likely that you are having an extension conflict."
-            f"Here are args received by ControlNet: {script_args}."
-        )
+    # if not all_units:
+    #     logger.warning(
+    #         "No ControlNetUnit detected in args. It is very likely that you are having an extension conflict."
+    #         f"Here are args received by ControlNet: {script_args}."
+    #     )
     if any(is_stale_unit(script_arg) for script_arg in script_args):
         logger.debug(
             "Stale version of ControlNetUnit detected. The ControlNetUnit received"

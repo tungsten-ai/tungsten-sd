@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 import math
 import os
 import random
@@ -8,12 +7,14 @@ import sys
 import time
 from typing import Any, Dict, List
 
+import cv2
 import numpy as np
 import torch
 from einops import rearrange, repeat
 from ldm.data.util import AddMiDaS
 from ldm.models.diffusion.ddpm import LatentDepth2ImageDiffusion
-from PIL import Image
+from PIL import Image, ImageOps
+from skimage import exposure
 
 import modules.face_restoration
 import modules.images as images
@@ -27,6 +28,7 @@ from modules import (
     errors,
     extra_networks,
     lowvram,
+    masking,
     prompt_parser,
     rng,
     scripts,
@@ -41,6 +43,60 @@ from modules.shared import cmd_opts, opts, state
 # some of those options should not be changed at all because they would break the model, so I removed them from options.
 opt_C = 4
 opt_f = 8
+
+
+def setup_color_correction(image):
+    print("Calibrating color correction.")
+    correction_target = cv2.cvtColor(np.asarray(image.copy()), cv2.COLOR_RGB2LAB)
+    return correction_target
+
+
+def apply_color_correction(correction, original_image):
+    from blendmodes.blend import BlendType, blendLayers
+
+    print("Applying color correction.")
+    image = Image.fromarray(
+        cv2.cvtColor(
+            exposure.match_histograms(
+                cv2.cvtColor(np.asarray(original_image), cv2.COLOR_RGB2LAB),
+                correction,
+                channel_axis=2,
+            ),
+            cv2.COLOR_LAB2RGB,
+        ).astype("uint8")
+    )
+
+    image = blendLayers(image, original_image, BlendType.LUMINOSITY)
+
+    return image.convert("RGB")
+
+
+def apply_overlay(image, paste_loc, index, overlays):
+    if overlays is None or index >= len(overlays):
+        return image
+
+    overlay = overlays[index]
+
+    if paste_loc is not None:
+        x, y, w, h = paste_loc
+        base_image = Image.new("RGBA", (overlay.width, overlay.height))
+        image = images.resize_image(1, image, w, h)
+        base_image.paste(image, (x, y))
+        image = base_image
+
+    image = image.convert("RGBA")
+    image.alpha_composite(overlay)
+    image = image.convert("RGB")
+
+    return image
+
+
+def create_binary_mask(image):
+    if image.mode == "RGBA" and image.getextrema()[-1] != (255, 255):
+        image = image.split()[-1].convert("L").point(lambda x: 255 if x > 128 else 0)
+    else:
+        image = image.convert("L")
+    return image
 
 
 def txt2img_image_conditioning(sd_model, x, width, height):
@@ -1054,6 +1110,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     p.scripts.postprocess_image(p, pp)
                     image = pp.image
 
+                image = apply_overlay(image, p.paste_to, i, p.overlay_images)
+
                 text = infotext(i)
                 infotexts.append(text)
                 image.info["parameters"] = text
@@ -1158,6 +1216,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.cached_hr_c = StableDiffusionProcessingTxt2Img.cached_hr_c
         self.hr_c = None
         self.hr_uc = None
+        self.overlay_images = None
 
     def init(self, all_prompts, all_seeds, all_subseeds):
         if self.enable_hr:
@@ -1512,3 +1571,295 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             )
 
         return res
+
+
+class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
+    sampler = None
+
+    def __init__(
+        self,
+        init_images: list = None,
+        resize_mode: int = 0,
+        denoising_strength: float = 0.75,
+        image_cfg_scale: float = None,
+        mask: Any = None,
+        mask_blur: int = None,
+        mask_blur_x: int = 4,
+        mask_blur_y: int = 4,
+        inpainting_fill: int = 0,
+        inpaint_full_res: bool = True,
+        inpaint_full_res_padding: int = 0,
+        inpainting_mask_invert: int = 0,
+        initial_noise_multiplier: float = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.init_images = init_images
+        self.resize_mode: int = resize_mode
+        self.denoising_strength: float = denoising_strength
+        self.image_cfg_scale: float = (
+            image_cfg_scale if shared.sd_model.cond_stage_key == "edit" else None
+        )
+        self.init_latent = None
+        self.image_mask = mask
+        self.latent_mask = None
+        self.mask_for_overlay = None
+        if mask_blur is not None:
+            mask_blur_x = mask_blur
+            mask_blur_y = mask_blur
+        self.mask_blur_x = mask_blur_x
+        self.mask_blur_y = mask_blur_y
+        self.inpainting_fill = inpainting_fill
+        self.inpaint_full_res = inpaint_full_res
+        self.inpaint_full_res_padding = inpaint_full_res_padding
+        self.inpainting_mask_invert = inpainting_mask_invert
+        self.initial_noise_multiplier = (
+            opts.initial_noise_multiplier
+            if initial_noise_multiplier is None
+            else initial_noise_multiplier
+        )
+        self.mask = None
+        self.nmask = None
+        self.image_conditioning = None
+        self.init_img_hash = None
+        self.mask_for_overlay = None
+        self.init_latent = None
+
+    @property
+    def mask_blur(self):
+        if self.mask_blur_x == self.mask_blur_y:
+            return self.mask_blur_x
+        return None
+
+    @mask_blur.setter
+    def mask_blur(self, value):
+        if isinstance(value, int):
+            self.mask_blur_x = value
+            self.mask_blur_y = value
+
+    def init(self, all_prompts, all_seeds, all_subseeds):
+        self.image_cfg_scale: float = (
+            self.image_cfg_scale if shared.sd_model.cond_stage_key == "edit" else None
+        )
+
+        self.sampler = sd_samplers.create_sampler(self.sampler_name, self.sd_model)
+        crop_region = None
+
+        image_mask = self.image_mask
+
+        if image_mask is not None:
+            # image_mask is passed in as RGBA by Gradio to support alpha masks,
+            # but we still want to support binary masks.
+            image_mask = create_binary_mask(image_mask)
+
+            if self.inpainting_mask_invert:
+                image_mask = ImageOps.invert(image_mask)
+
+            if self.mask_blur_x > 0:
+                np_mask = np.array(image_mask)
+                kernel_size = 2 * int(2.5 * self.mask_blur_x + 0.5) + 1
+                np_mask = cv2.GaussianBlur(np_mask, (kernel_size, 1), self.mask_blur_x)
+                image_mask = Image.fromarray(np_mask)
+
+            if self.mask_blur_y > 0:
+                np_mask = np.array(image_mask)
+                kernel_size = 2 * int(2.5 * self.mask_blur_y + 0.5) + 1
+                np_mask = cv2.GaussianBlur(np_mask, (1, kernel_size), self.mask_blur_y)
+                image_mask = Image.fromarray(np_mask)
+
+            if self.inpaint_full_res:
+                self.mask_for_overlay = image_mask
+                mask = image_mask.convert("L")
+                crop_region = masking.get_crop_region(
+                    np.array(mask), self.inpaint_full_res_padding
+                )
+                crop_region = masking.expand_crop_region(
+                    crop_region, self.width, self.height, mask.width, mask.height
+                )
+                x1, y1, x2, y2 = crop_region
+
+                mask = mask.crop(crop_region)
+                image_mask = images.resize_image(2, mask, self.width, self.height)
+                self.paste_to = (x1, y1, x2 - x1, y2 - y1)
+            else:
+                image_mask = images.resize_image(
+                    self.resize_mode, image_mask, self.width, self.height
+                )
+                np_mask = np.array(image_mask)
+                np_mask = np.clip((np_mask.astype(np.float32)) * 2, 0, 255).astype(
+                    np.uint8
+                )
+                self.mask_for_overlay = Image.fromarray(np_mask)
+
+            self.overlay_images = []
+
+        latent_mask = self.latent_mask if self.latent_mask is not None else image_mask
+
+        add_color_corrections = (
+            opts.img2img_color_correction and self.color_corrections is None
+        )
+        if add_color_corrections:
+            self.color_corrections = []
+        imgs = []
+        for img in self.init_images:
+            # Save init image
+            if opts.save_init_img:
+                self.init_img_hash = hashlib.md5(img.tobytes()).hexdigest()
+                images.save_image(
+                    img,
+                    path=opts.outdir_init_images,
+                    basename=None,
+                    forced_filename=self.init_img_hash,
+                    save_to_dirs=False,
+                )
+
+            image = images.flatten(img, opts.img2img_background_color)
+
+            if crop_region is None and self.resize_mode != 3:
+                image = images.resize_image(
+                    self.resize_mode, image, self.width, self.height
+                )
+
+            if image_mask is not None:
+                image_masked = Image.new("RGBa", (image.width, image.height))
+                image_masked.paste(
+                    image.convert("RGBA").convert("RGBa"),
+                    mask=ImageOps.invert(self.mask_for_overlay.convert("L")),
+                )
+
+                self.overlay_images.append(image_masked.convert("RGBA"))
+
+            # crop_region is not None if we are doing inpaint full res
+            if crop_region is not None:
+                image = image.crop(crop_region)
+                image = images.resize_image(2, image, self.width, self.height)
+
+            if image_mask is not None:
+                if self.inpainting_fill != 1:
+                    image = masking.fill(image, latent_mask)
+
+            if add_color_corrections:
+                self.color_corrections.append(setup_color_correction(image))
+
+            image = np.array(image).astype(np.float32) / 255.0
+            image = np.moveaxis(image, 2, 0)
+
+            imgs.append(image)
+
+        if len(imgs) == 1:
+            batch_images = np.expand_dims(imgs[0], axis=0).repeat(
+                self.batch_size, axis=0
+            )
+            if self.overlay_images is not None:
+                self.overlay_images = self.overlay_images * self.batch_size
+
+            if self.color_corrections is not None and len(self.color_corrections) == 1:
+                self.color_corrections = self.color_corrections * self.batch_size
+
+        elif len(imgs) <= self.batch_size:
+            self.batch_size = len(imgs)
+            batch_images = np.array(imgs)
+        else:
+            raise RuntimeError(
+                f"bad number of images passed: {len(imgs)}; expecting {self.batch_size} or less"
+            )
+
+        image = torch.from_numpy(batch_images)
+        image = image.to(shared.device, dtype=devices.dtype_vae)
+
+        if opts.sd_vae_encode_method != "Full":
+            self.extra_generation_params["VAE Encoder"] = opts.sd_vae_encode_method
+
+        self.init_latent = sd_samplers_common.images_tensor_to_samples(
+            image,
+            sd_samplers_common.approximation_indexes.get(opts.sd_vae_encode_method),
+            self.sd_model,
+        )
+        devices.torch_gc()
+
+        if self.resize_mode == 3:
+            self.init_latent = torch.nn.functional.interpolate(
+                self.init_latent,
+                size=(self.height // opt_f, self.width // opt_f),
+                mode="bilinear",
+            )
+
+        if image_mask is not None:
+            init_mask = latent_mask
+            latmask = init_mask.convert("RGB").resize(
+                (self.init_latent.shape[3], self.init_latent.shape[2])
+            )
+            latmask = np.moveaxis(np.array(latmask, dtype=np.float32), 2, 0) / 255
+            latmask = latmask[0]
+            latmask = np.around(latmask)
+            latmask = np.tile(latmask[None], (4, 1, 1))
+
+            self.mask = (
+                torch.asarray(1.0 - latmask).to(shared.device).type(self.sd_model.dtype)
+            )
+            self.nmask = (
+                torch.asarray(latmask).to(shared.device).type(self.sd_model.dtype)
+            )
+
+            # this needs to be fixed to be done in sample() using actual seeds for batches
+            if self.inpainting_fill == 2:
+                self.init_latent = (
+                    self.init_latent * self.mask
+                    + create_random_tensors(
+                        self.init_latent.shape[1:],
+                        all_seeds[0 : self.init_latent.shape[0]],
+                    )
+                    * self.nmask
+                )
+            elif self.inpainting_fill == 3:
+                self.init_latent = self.init_latent * self.mask
+
+        self.image_conditioning = self.img2img_image_conditioning(
+            image * 2 - 1, self.init_latent, image_mask
+        )
+
+    def sample(
+        self,
+        conditioning,
+        unconditional_conditioning,
+        seeds,
+        subseeds,
+        subseed_strength,
+        prompts,
+    ):
+        x = self.rng.next()
+
+        if self.initial_noise_multiplier != 1.0:
+            self.extra_generation_params[
+                "Noise multiplier"
+            ] = self.initial_noise_multiplier
+            x *= self.initial_noise_multiplier
+
+        samples = self.sampler.sample_img2img(
+            self,
+            self.init_latent,
+            x,
+            conditioning,
+            unconditional_conditioning,
+            image_conditioning=self.image_conditioning,
+        )
+
+        if self.mask is not None:
+            samples = samples * self.nmask + self.init_latent * self.mask
+
+        del x
+        devices.torch_gc()
+
+        return samples
+
+    def get_token_merging_ratio(self, for_hr=False):
+        return (
+            self.token_merging_ratio
+            or (
+                "token_merging_ratio" in self.override_settings
+                and opts.token_merging_ratio
+            )
+            or opts.token_merging_ratio_img2img
+            or opts.token_merging_ratio
+        )

@@ -20,6 +20,7 @@ def initialize(*, is_sdxl, default_sampler):
                 "--controlnet-dir=models/ControlNet",
                 "--controlnet-annotator-models-path=models/ControlNetAnnotators",
                 "--no-hashing",
+                "--ad-no-huggingface",
             ]
         )
     else:
@@ -29,6 +30,7 @@ def initialize(*, is_sdxl, default_sampler):
                 "--controlnet-dir=models/ControlNet",
                 "--controlnet-annotator-models-path=models/ControlNetAnnotators",
                 "--no-hashing",
+                "--ad-no-huggingface",
             ]
         )
 
@@ -144,6 +146,7 @@ def initialize(*, is_sdxl, default_sampler):
     t.record("wait for loading model")
 
     modules.script_callbacks.before_ui_callback()
+    modules.script_callbacks.ui_settings_callback()
     t.record("init callbacks")
 
     print(f"Setup done in {t.summary()}")

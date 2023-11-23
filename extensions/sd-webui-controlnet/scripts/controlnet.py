@@ -34,7 +34,7 @@ from modules import (devices, images, masking, processing, script_callbacks,
                      shared)
 from modules.images import save_image
 from modules.processing import \
-    StableDiffusionProcessingTxt2Img  # StableDiffusionProcessingImg2Img, # TODO img2img
+    StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img
 from scripts import (batch_hijack, controlnet_version, external_code,
                      global_state, hook, processor, utils)
 
@@ -64,14 +64,13 @@ def find_closest_lora_model_name(search: str):
     return global_state.cn_models_names[applicable[0]]
 
 
-# TODO img2img
-# def swap_img2img_pipeline(p: processing.StableDiffusionProcessingImg2Img):
-#     p.__class__ = processing.StableDiffusionProcessingTxt2Img
-#     dummy = processing.StableDiffusionProcessingTxt2Img()
-#     for k, v in dummy.__dict__.items():
-#         if hasattr(p, k):
-#             continue
-#         setattr(p, k, v)
+def swap_img2img_pipeline(p: processing.StableDiffusionProcessingImg2Img):
+    p.__class__ = processing.StableDiffusionProcessingTxt2Img
+    dummy = processing.StableDiffusionProcessingTxt2Img()
+    for k, v in dummy.__dict__.items():
+        if hasattr(p, k):
+            continue
+        setattr(p, k, v)
 
 
 global_state.update_cn_models()
@@ -736,59 +735,58 @@ class Script(
                                     a1111_i2i_resize_mode
                                 )
 
-            # TODO img2img
-            # if (
-            #     "reference" not in unit.module
-            #     and issubclass(type(p), StableDiffusionProcessingImg2Img)
-            #     and p.inpaint_full_res
-            #     and a1111_mask_image is not None
-            # ):
-            #     logger.debug("A1111 inpaint mask START")
-            #     input_image = [
-            #         input_image[:, :, i] for i in range(input_image.shape[2])
-            #     ]
-            #     input_image = [Image.fromarray(x) for x in input_image]
+            if (
+                "reference" not in unit.module
+                and issubclass(type(p), StableDiffusionProcessingImg2Img)
+                and p.inpaint_full_res
+                and a1111_mask_image is not None
+            ):
+                logger.debug("A1111 inpaint mask START")
+                input_image = [
+                    input_image[:, :, i] for i in range(input_image.shape[2])
+                ]
+                input_image = [Image.fromarray(x) for x in input_image]
 
-            #     mask = prepare_mask(a1111_mask_image, p)
+                mask = prepare_mask(a1111_mask_image, p)
 
-            #     crop_region = masking.get_crop_region(
-            #         np.array(mask), p.inpaint_full_res_padding
-            #     )
-            #     crop_region = masking.expand_crop_region(
-            #         crop_region, p.width, p.height, mask.width, mask.height
-            #     )
+                crop_region = masking.get_crop_region(
+                    np.array(mask), p.inpaint_full_res_padding
+                )
+                crop_region = masking.expand_crop_region(
+                    crop_region, p.width, p.height, mask.width, mask.height
+                )
 
-            #     input_image = [
-            #         images.resize_image(
-            #             resize_mode.int_value(), i, mask.width, mask.height
-            #         )
-            #         for i in input_image
-            #     ]
+                input_image = [
+                    images.resize_image(
+                        resize_mode.int_value(), i, mask.width, mask.height
+                    )
+                    for i in input_image
+                ]
 
-            #     input_image = [x.crop(crop_region) for x in input_image]
-            #     input_image = [
-            #         images.resize_image(
-            #             external_code.ResizeMode.OUTER_FIT.int_value(),
-            #             x,
-            #             p.width,
-            #             p.height,
-            #         )
-            #         for x in input_image
-            #     ]
+                input_image = [x.crop(crop_region) for x in input_image]
+                input_image = [
+                    images.resize_image(
+                        external_code.ResizeMode.OUTER_FIT.int_value(),
+                        x,
+                        p.width,
+                        p.height,
+                    )
+                    for x in input_image
+                ]
 
-            #     input_image = [np.asarray(x)[:, :, 0] for x in input_image]
-            #     input_image = np.stack(input_image, axis=2)
-            #     logger.debug("A1111 inpaint mask END")
+                input_image = [np.asarray(x)[:, :, 0] for x in input_image]
+                input_image = np.stack(input_image, axis=2)
+                logger.debug("A1111 inpaint mask END")
 
-            # if (
-            #     "inpaint_only" == unit.module
-            #     and issubclass(type(p), StableDiffusionProcessingImg2Img)
-            #     and p.image_mask is not None
-            # ):
-            #     print(
-            #         "A1111 inpaint and ControlNet inpaint duplicated. ControlNet support enabled."
-            #     )
-            #     unit.module = "inpaint"
+            if (
+                "inpaint_only" == unit.module
+                and issubclass(type(p), StableDiffusionProcessingImg2Img)
+                and p.image_mask is not None
+            ):
+                print(
+                    "A1111 inpaint and ControlNet inpaint duplicated. ControlNet support enabled."
+                )
+                unit.module = "inpaint"
 
             # safe numpy
             logger.debug("Safe numpy convertion START")

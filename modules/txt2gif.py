@@ -45,7 +45,7 @@ def txt2gif(
     cfg_scale: float,
     width: int,
     height: int,
-    clip_skip: bool,
+    clip_skip: int,
     model_name: str,
     gif_fps: int,
     gif_frames_count: int,
@@ -116,7 +116,7 @@ def txt2gif(
     )
 
     # Prepare processing
-    shared.opts.set("CLIP_stop_at_last_layers", 2 if clip_skip else 1)
+    shared.opts.set("CLIP_stop_at_last_layers", clip_skip)
     # print("Full positive prompt:", prompt)
     # print("Full negative prompt", negative_prompt)
     processing = StableDiffusionProcessingTxt2Img(

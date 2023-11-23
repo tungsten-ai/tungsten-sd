@@ -757,6 +757,8 @@ options_templates.update(
             ).info(
                 "choose VAE model: Automatic = use one with same filename as checkpoint; None = use VAE from checkpoint"
             ),
+            "sd_vae_encode_method": OptionInfo("Full", "VAE type for encode", gr.Radio, {"choices": ["Full", "TAESD"]}).info("method to encode image to latent (use in img2img, hires-fix or inpaint mask)"),
+            "sd_vae_decode_method": OptionInfo("Full", "VAE type for decode", gr.Radio, {"choices": ["Full", "TAESD"]}).info("method to decode latent to image"),
             "sd_vae_as_default": OptionInfo(
                 True,
                 "Ignore selected VAE for stable diffusion checkpoints that have their own .vae.pt next to them",
@@ -782,6 +784,7 @@ options_templates.update(
                 gr.Slider,
                 {"minimum": 0.5, "maximum": 1.5, "step": 0.01},
             ),
+            "img2img_extra_noise": OptionInfo(0.0, "Extra noise multiplier for img2img and hires fix", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}).info("0 = disabled (default); should be lower than denoising strength"),
             "img2img_color_correction": OptionInfo(
                 False,
                 "Apply color correction to img2img results to match original colors.",

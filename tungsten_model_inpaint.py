@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple, Union
 
 from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize, initialize_vae, load_vae_weights
-from modules.txt2img import txt2img
-from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
+from modules.inpaint import inpaint
+from tungstenkit import BaseIO, Binary, Field, Image, MaskedImage, Option, define_model
 
 VAE_FILE_PATHS = (
     glob("models/VAE/*.safetensors")
@@ -60,12 +60,6 @@ SD_VAES_IN_BASE_IMAGE = [
 SDXL_VAES_IN_BASE_IMAGE = [
     "sdxl_vae.safetensors",
 ]
-LORAS_IN_BASE_IMAGE = {
-    "detail": "add-detail-xl" if IS_SDXL else "add_detail",
-    "brightness": "TLS" if IS_SDXL else "add_brightness",
-    "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
-    "saturation": None if IS_SDXL else "add_saturation",
-}
 ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     "models/VAE/" + vae_name
     for vae_name in (SDXL_VAES_IN_BASE_IMAGE if IS_SDXL else SD_VAES_IN_BASE_IMAGE)
@@ -76,48 +70,18 @@ DEFAULT_SAMPLER = "Restart"
 
 
 class Input(BaseIO):
+    masked_image: MaskedImage = Field(description="Input image with mask")
     prompt: str = Field(description="Specify things to see in the output")
     negative_prompt: str = Option(
         description="Specify things to not see in the output",
         default="",
     )
-    enhance_face_with_adetailer: bool = Option(
-        description="Enhance face with adetailer",
-        default=False,
+    denoising_strength: float = Option(
+        description="Control how much respect the output image should pay to the original content. Setting it to 0 changes nothing. Setting to 1 you'll get an unrelated image.",
+        default=0.7,
+        le=1.0,
+        ge=0.0,
     )
-    enhance_hands_with_adetailer: bool = Option(
-        description="Enhance hands with adetailer",
-        default=False,
-    )
-    adetailer_denoising_strength: float = Option(
-        description="1: completely redraw face or hands / 0: no effect on output images",
-        default=0.55,
-    )
-    detail: float = Option(
-        description="Enhance/diminish detail while keeping the overall style/character",
-        default=0.0,
-        le=2.0,
-        ge=-2.0,
-    )
-    brightness: float = Option(
-        description="Adjust brightness",
-        default=0.0,
-        le=1.5 if IS_SDXL else 2.0,
-        ge=-1.5 if IS_SDXL else -2.0,
-    )
-    contrast: float = Option(
-        description="Adjust contrast",
-        default=0.0,
-        le=1.5 if IS_SDXL else 5.0,
-        ge=-1.0 if IS_SDXL else -5.0,
-    )
-    if not IS_SDXL:
-        saturation: float = Option(
-            description="Adjust saturation",
-            default=0.0,
-            le=3.0,
-            ge=-3.0,
-        )
     num_outputs: int = Option(
         description="Number of output images",
         le=3 if IS_SDXL else 4,
@@ -142,43 +106,13 @@ class Input(BaseIO):
         ge=512,
         le=2048 if IS_SDXL else 1024,
     )
-    reference_image: Optional[Image] = Option(
-        description="Image that the output should be similar to",
-        default=None,
-    )
-    reference_image_strength: float = Option(
-        description="Strength of applying reference_image. Used only when reference_image is given.",
-        default=1.0,
-        ge=0.0,
-        le=2.0,
-    )
-    reference_pose_image: Optional[Image] = Option(
-        description="Image with a reference pose",
-        default=None,
-    )
-    reference_pose_strength: float = Option(
-        description="Strength of applying reference_pose_image. Used only when reference_pose_image is given.",  # noqa: E501
-        default=1.0,
-        ge=0.0,
-        le=2.0,
-    )
-    reference_depth_image: Optional[Image] = Option(
-        description="Image with a reference depth",
-        default=None,
-    )
-    reference_depth_strength: float = Option(
-        description="Strength of applying reference_depth_image. Used only when reference_depth_image is given.",  # noqa: E501
-        default=1.0,
-        ge=0.0,
-        le=2.0,
-    )
     sampler: str = Option(
         default=DEFAULT_SAMPLER,
         choices=SAMPLERS,
         description="Sampler type",
     )
     samping_steps: int = Option(
-        description="Number of denoising steps", ge=1, le=80, default=20
+        description="Number of denoising steps", ge=1, le=100, default=20
     )
     cfg_scale: float = Option(
         description="Scale for classifier-free guidance", ge=1, le=20, default=7
@@ -237,8 +171,6 @@ class Output(BaseIO):
     include_files=[
         "configs",
         "extensions-builtin",
-        "extensions/sd-webui-controlnet",
-        "extensions/adetailer",
         "localizations",
         "models/Stable-diffusion",
         "models/VAE",
@@ -248,7 +180,7 @@ class Output(BaseIO):
         "embeddings",
         "check_if_sdxl.py",
     ],
-    base_image="mjpyeon/tungsten-sd-txt2img-base:v4",
+    base_image="mjpyeon/tungsten-sd-base:v3",
 )
 class StableDiffusion:
     @staticmethod
@@ -262,11 +194,6 @@ class StableDiffusion:
             default_sampler=DEFAULT_SAMPLER,
         )
         initialize_vae()
-        dummy_input = Input(
-            prompt="dummy",
-            samping_steps=1,
-        )
-        self.predict([dummy_input])
 
     def predict(self, inputs: List[Input]) -> List[Output]:
         input = inputs[0]
@@ -289,23 +216,20 @@ class StableDiffusion:
             )
             try:
                 # Generate images
-                images = txt2img(
+                images = inpaint(
+                    masked_image=input.masked_image,
                     prompt=input.prompt,
                     negative_prompt=input.negative_prompt,
                     seed=float(input.seed),
                     sampler_name=input.sampler,
                     batch_size=input.num_outputs,
                     steps=input.samping_steps,
+                    denoising_strength=input.denoising_strength,
                     cfg_scale=input.cfg_scale,
                     width=input.width,
                     height=input.height,
                     clip_skip=input.clip_skip,
-                    loras=self.get_loras(input)
-                    + [
-                        (built_in_lora, getattr(input, field_name))
-                        for field_name, built_in_lora in LORAS_IN_BASE_IMAGE.items()
-                        if built_in_lora
-                    ],
+                    loras=self.get_loras(input),
                     trigger_words=self.get_trigger_words(input),
                     extra_positive_prompt_chunks=[]
                     if input.disable_prompt_modification
@@ -313,15 +237,6 @@ class StableDiffusion:
                     extra_negative_prompt_chunks=[]
                     if input.disable_prompt_modification
                     else self.get_extra_negative_prompt_chunks(input),
-                    controlnet_pose_image=input.reference_pose_image,
-                    controlnet_depth_image=input.reference_depth_image,
-                    controlnet_reference_only_image=input.reference_image,
-                    controlnet_pose_weight=input.reference_pose_strength,
-                    controlnet_depth_weight=input.reference_depth_strength,
-                    controlnet_reference_only_weight=input.reference_image_strength,
-                    adtailer_denoising_strength=input.adetailer_denoising_strength,
-                    enhance_face_with_adtailer=input.enhance_face_with_adetailer,
-                    enhance_hands_with_adtailer=input.enhance_hands_with_adetailer,
                 )
 
                 return [Output(images=images)]
@@ -466,3 +381,10 @@ def _compute_hash(p: Path):
             hash_sha256.update(chunk)
 
     return hash_sha256.hexdigest()
+
+if __name__ == "__main__":
+    input = Input(masked_image=MaskedImage(image=Image.from_path("00000-1330745489.png"), mask=Image.from_path("mask.png")), prompt="pretty europian girl, 25 years old", sampling_steps=20, denoising_strength=0.7, brightness=0.5)
+    model = StableDiffusion()
+    model.setup()
+    outputs = model.predict([input])
+    print(outputs[0].images[0].path)
