@@ -6,16 +6,12 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
+
 from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.txt2img import txt2img
-from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
 
-VAE_FILE_PATHS = (
-    glob("models/VAE/*.safetensors")
-    + glob("models/VAE/*.pt")
-    + glob("models/VAE/*.ckpt")
-)
 SD_FILE_PATHS = glob("models/Stable-diffusion/*.safetensors")
 assert len(SD_FILE_PATHS) > 0, "Stable diffusion checkpoint not found"
 IS_SDXL = check_if_sdxl(SD_FILE_PATHS[0])
@@ -49,6 +45,13 @@ SAMPLERS = [
     "DPM++ 2S a Karras",
     "Restart",
 ]
+DEFAULT_SAMPLER = "Restart"
+
+VAE_FILE_PATHS = (
+    glob("models/VAE/*.safetensors")
+    + glob("models/VAE/*.pt")
+    + glob("models/VAE/*.ckpt")
+)
 SD_VAES_IN_BASE_IMAGE = [
     "vae-ft-mse-840000-ema-pruned_fp16.safetensors",
     "orangemix.vae.pt",
@@ -60,19 +63,23 @@ SD_VAES_IN_BASE_IMAGE = [
 SDXL_VAES_IN_BASE_IMAGE = [
     "sdxl_vae.safetensors",
 ]
-LORAS_IN_BASE_IMAGE = {
-    "detail": "add-detail-xl" if IS_SDXL else "add_detail",
-    "brightness": "TLS" if IS_SDXL else "add_brightness",
-    "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
-    "saturation": None if IS_SDXL else "add_saturation",
-}
 ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     "models/VAE/" + vae_name
     for vae_name in (SDXL_VAES_IN_BASE_IMAGE if IS_SDXL else SD_VAES_IN_BASE_IMAGE)
     if vae_name not in [p.split("/")[-1] for p in VAE_FILE_PATHS]
 ]
 
-DEFAULT_SAMPLER = "Restart"
+LORA_FILE_PATHS = (
+    glob("models/Lora/*.safetensors")
+    + glob("models/Lora/*.pt")
+    + glob("models/Lora/*.ckpt")
+)
+LORAS_IN_BASE_IMAGE = {
+    "detail": "add-detail-xl" if IS_SDXL else "add_detail",
+    "brightness": "TLS" if IS_SDXL else "add_brightness",
+    "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
+    "saturation": None if IS_SDXL else "add_saturation",
+}
 
 
 class Input(BaseIO):
@@ -240,14 +247,14 @@ class Output(BaseIO):
         "extensions/sd-webui-controlnet",
         "extensions/adetailer",
         "localizations",
-        "models/Stable-diffusion",
-        "models/VAE",
-        "models/Lora",
         "modules",
         "repositories",
         "embeddings",
         "check_if_sdxl.py",
-    ],
+    ]
+    + SD_FILE_PATHS
+    + VAE_FILE_PATHS
+    + LORA_FILE_PATHS,
     base_image="mjpyeon/tungsten-sd-txt2img-base:v4",
 )
 class StableDiffusion:
