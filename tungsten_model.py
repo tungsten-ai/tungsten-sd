@@ -81,6 +81,12 @@ LORAS_IN_BASE_IMAGE = {
     "saturation": None if IS_SDXL else "add_saturation",
 }
 
+EMBEDDING_FILE_PATHS = (
+    glob("embeddings/*.safetensors")
+    + glob("embeddings/*.pt")
+    + glob("embeddings/*.ckpt")
+)
+
 
 class Input(BaseIO):
     prompt: str = Field(description="Specify things to see in the output")
@@ -249,12 +255,12 @@ class Output(BaseIO):
         "localizations",
         "modules",
         "repositories",
-        "embeddings",
         "check_if_sdxl.py",
     ]
     + SD_FILE_PATHS
     + VAE_FILE_PATHS
-    + LORA_FILE_PATHS,
+    + LORA_FILE_PATHS
+    + EMBEDDING_FILE_PATHS,
     base_image="mjpyeon/tungsten-sd-txt2img-base:v4",
 )
 class StableDiffusion:
