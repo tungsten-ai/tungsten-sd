@@ -240,6 +240,10 @@ class Input(BaseIO):
 class Output(BaseIO):
     images: List[Image]
 
+def _to_posix_paths(paths: List[str]) -> List[str]:
+    return [
+        Path(p).as_posix() for p in paths
+    ]
 
 @define_model(
     input=Input,
@@ -257,10 +261,10 @@ class Output(BaseIO):
         "repositories",
         "check_if_sdxl.py",
     ]
-    + SD_FILE_PATHS
-    + VAE_FILE_PATHS
-    + LORA_FILE_PATHS
-    + EMBEDDING_FILE_PATHS,
+    + _to_posix_paths(SD_FILE_PATHS)
+    + _to_posix_paths(VAE_FILE_PATHS)
+    + _to_posix_paths(LORA_FILE_PATHS)
+    + _to_posix_paths(EMBEDDING_FILE_PATHS),
     base_image="mjpyeon/tungsten-sd-txt2img-base:v4",
 )
 class StableDiffusion:
