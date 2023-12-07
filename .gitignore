@@ -173,3 +173,4 @@ cython_debug/
 /cache.json.lock
 /venv_download
 _internal*
+extensions/sd-webui-animatediff/model
