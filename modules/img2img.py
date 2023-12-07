@@ -1,7 +1,7 @@
 import os
 import shutil
-from typing import List, Optional, Tuple, Union
 from contextlib import closing
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from tungstenkit import Image
@@ -89,7 +89,7 @@ def img2img(
     print()
     print("Full negative prompt:", negative_prompt)
     processing = StableDiffusionProcessingImg2Img(
-        init_images=[input_image.image.to_pil_image()],
+        init_images=[input_image.to_pil_image()],
         denoising_strength=denoising_strength,
         sd_model=shared.sd_model,
         prompt=prompt,
@@ -111,90 +111,94 @@ def img2img(
     processing.scripts.scripts[0].args_to = 3
     processing.scripts.scripts[1].args_from = 3
     processing.scripts.scripts[1].args_to = 6
-    
-    processing.script_args.append({
-        'ad_model': 'face_yolov8s.pt' if enhance_face_with_adtailer else 'None', 
-        'ad_prompt': '', 
-        'ad_negative_prompt': '', 
-        'ad_confidence': 0.3, 
-        'ad_mask_k_largest': 0, 
-        'ad_mask_min_ratio': 0, 
-        'ad_mask_max_ratio': 1, 
-        'ad_x_offset': 0, 
-        'ad_y_offset': 0, 
-        'ad_dilate_erode': 4, 
-        'ad_mask_merge_invert': 'None', 
-        'ad_mask_blur': 4, 
-        'ad_denoising_strength': adtailer_denoising_strength, 
-        'ad_inpaint_only_masked': True, 
-        'ad_inpaint_only_masked_padding': 32, 
-        'ad_use_inpaint_width_height': False, 
-        'ad_inpaint_width': 512, 
-        'ad_inpaint_height': 512, 
-        'ad_use_steps': False, 
-        'ad_steps': 28, 
-        'ad_use_cfg_scale': False, 
-        'ad_cfg_scale': 7, 
-        'ad_use_checkpoint': False, 
-        'ad_checkpoint': 'Use same checkpoint', 
-        'ad_use_vae': False, 
-        'ad_vae': 'Use same VAE', 
-        'ad_use_sampler': False, 
-        'ad_sampler': 'DPM++ 2M Karras', 
-        'ad_use_noise_multiplier': False, 
-        'ad_noise_multiplier': 1, 
-        'ad_use_clip_skip': False, 
-        'ad_clip_skip': 1, 
-        'ad_restore_face': False, 
-        'ad_controlnet_model': 'None', 
-        'ad_controlnet_module': 'inpaint_global_harmonious', 
-        'ad_controlnet_weight': 1, 
-        'ad_controlnet_guidance_start': 0, 
-        'ad_controlnet_guidance_end': 1, 
-        'is_api': ()
-    })
 
-    processing.script_args.append({
-        'ad_model': 'hand_yolov8n.pt' if enhance_hands_with_adtailer else 'None', 
-        'ad_prompt': '', 
-        'ad_negative_prompt': '', 
-        'ad_confidence': 0.3, 
-        'ad_mask_k_largest': 0, 
-        'ad_mask_min_ratio': 0, 
-        'ad_mask_max_ratio': 1, 
-        'ad_x_offset': 0, 
-        'ad_y_offset': 0, 
-        'ad_dilate_erode': 4, 
-        'ad_mask_merge_invert': 'None', 
-        'ad_mask_blur': 4, 
-        'ad_denoising_strength': adtailer_denoising_strength, 
-        'ad_inpaint_only_masked': True, 
-        'ad_inpaint_only_masked_padding': 32, 
-        'ad_use_inpaint_width_height': False, 
-        'ad_inpaint_width': 512, 
-        'ad_inpaint_height': 512, 
-        'ad_use_steps': False, 
-        'ad_steps': 28, 
-        'ad_use_cfg_scale': False, 
-        'ad_cfg_scale': 7, 
-        'ad_use_checkpoint': False, 
-        'ad_checkpoint': 'Use same checkpoint', 
-        'ad_use_vae': False, 
-        'ad_vae': 'Use same VAE', 
-        'ad_use_sampler': False, 
-        'ad_sampler': 'DPM++ 2M Karras', 
-        'ad_use_noise_multiplier': False, 
-        'ad_noise_multiplier': 1, 
-        'ad_use_clip_skip': False, 
-        'ad_clip_skip': 1, 
-        'ad_restore_face': False, 
-        'ad_controlnet_model': 'None', 
-        'ad_controlnet_module': 'inpaint_global_harmonious', 
-        'ad_controlnet_weight': 1, 
-        'ad_controlnet_guidance_start': 0, 
-        'ad_controlnet_guidance_end': 1, 
-        'is_api': ()
-    })
+    processing.script_args.append(
+        {
+            "ad_model": "face_yolov8s.pt" if enhance_face_with_adtailer else "None",
+            "ad_prompt": "",
+            "ad_negative_prompt": "",
+            "ad_confidence": 0.3,
+            "ad_mask_k_largest": 0,
+            "ad_mask_min_ratio": 0,
+            "ad_mask_max_ratio": 1,
+            "ad_x_offset": 0,
+            "ad_y_offset": 0,
+            "ad_dilate_erode": 4,
+            "ad_mask_merge_invert": "None",
+            "ad_mask_blur": 4,
+            "ad_denoising_strength": adtailer_denoising_strength,
+            "ad_inpaint_only_masked": True,
+            "ad_inpaint_only_masked_padding": 32,
+            "ad_use_inpaint_width_height": False,
+            "ad_inpaint_width": 512,
+            "ad_inpaint_height": 512,
+            "ad_use_steps": False,
+            "ad_steps": 28,
+            "ad_use_cfg_scale": False,
+            "ad_cfg_scale": 7,
+            "ad_use_checkpoint": False,
+            "ad_checkpoint": "Use same checkpoint",
+            "ad_use_vae": False,
+            "ad_vae": "Use same VAE",
+            "ad_use_sampler": False,
+            "ad_sampler": "DPM++ 2M Karras",
+            "ad_use_noise_multiplier": False,
+            "ad_noise_multiplier": 1,
+            "ad_use_clip_skip": False,
+            "ad_clip_skip": 1,
+            "ad_restore_face": False,
+            "ad_controlnet_model": "None",
+            "ad_controlnet_module": "inpaint_global_harmonious",
+            "ad_controlnet_weight": 1,
+            "ad_controlnet_guidance_start": 0,
+            "ad_controlnet_guidance_end": 1,
+            "is_api": (),
+        }
+    )
+
+    processing.script_args.append(
+        {
+            "ad_model": "hand_yolov8n.pt" if enhance_hands_with_adtailer else "None",
+            "ad_prompt": "",
+            "ad_negative_prompt": "",
+            "ad_confidence": 0.3,
+            "ad_mask_k_largest": 0,
+            "ad_mask_min_ratio": 0,
+            "ad_mask_max_ratio": 1,
+            "ad_x_offset": 0,
+            "ad_y_offset": 0,
+            "ad_dilate_erode": 4,
+            "ad_mask_merge_invert": "None",
+            "ad_mask_blur": 4,
+            "ad_denoising_strength": adtailer_denoising_strength,
+            "ad_inpaint_only_masked": True,
+            "ad_inpaint_only_masked_padding": 32,
+            "ad_use_inpaint_width_height": False,
+            "ad_inpaint_width": 512,
+            "ad_inpaint_height": 512,
+            "ad_use_steps": False,
+            "ad_steps": 28,
+            "ad_use_cfg_scale": False,
+            "ad_cfg_scale": 7,
+            "ad_use_checkpoint": False,
+            "ad_checkpoint": "Use same checkpoint",
+            "ad_use_vae": False,
+            "ad_vae": "Use same VAE",
+            "ad_use_sampler": False,
+            "ad_sampler": "DPM++ 2M Karras",
+            "ad_use_noise_multiplier": False,
+            "ad_noise_multiplier": 1,
+            "ad_use_clip_skip": False,
+            "ad_clip_skip": 1,
+            "ad_restore_face": False,
+            "ad_controlnet_model": "None",
+            "ad_controlnet_module": "inpaint_global_harmonious",
+            "ad_controlnet_weight": 1,
+            "ad_controlnet_guidance_start": 0,
+            "ad_controlnet_guidance_end": 1,
+            "is_api": (),
+        }
+    )
 
     # Controlnet script
     processing.script_args.append(
@@ -206,9 +210,11 @@ def img2img(
             else "controlnet11Models_openpose",
             "weight": controlnet_pose_weight,
             "image": {
-                "image": np.array(
-                    controlnet_pose_image.to_pil_image("RGB")
-                ).astype("uint8") if controlnet_pose_image is not None else None,
+                "image": np.array(controlnet_pose_image.to_pil_image("RGB")).astype(
+                    "uint8"
+                )
+                if controlnet_pose_image is not None
+                else None,
                 "mask": None,
             },
             "resize_mode": "Crop and Resize",
@@ -235,9 +241,11 @@ def img2img(
             else "controlnet11Models_depth",
             "weight": controlnet_depth_weight,
             "image": {
-                "image": np.array(
-                    controlnet_depth_image.to_pil_image("RGB")
-                ).astype("uint8") if controlnet_depth_image else None,
+                "image": np.array(controlnet_depth_image.to_pil_image("RGB")).astype(
+                    "uint8"
+                )
+                if controlnet_depth_image
+                else None,
                 "mask": None,
             },
             "resize_mode": "Crop and Resize",
@@ -264,7 +272,9 @@ def img2img(
             "image": {
                 "image": np.array(
                     controlnet_reference_only_image.to_pil_image("RGB")
-                ).astype("uint8") if controlnet_reference_only_image is not None else None,
+                ).astype("uint8")
+                if controlnet_reference_only_image is not None
+                else None,
                 "mask": None,
             },
             "resize_mode": "Crop and Resize",

@@ -1626,6 +1626,8 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
         self.mask_for_overlay = None
         self.init_latent = None
 
+        self.overlay_images = None
+
     @property
     def mask_blur(self):
         if self.mask_blur_x == self.mask_blur_y:

@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple, Union
 from tungstenkit import BaseIO, Binary, Field, Image, Option, define_model
 
 from check_if_sdxl import check_if_sdxl
+from modules.img2img import img2img
 from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.txt2img import txt2img
 
@@ -94,6 +95,24 @@ class Input(BaseIO):
         description="Specify things to not see in the output",
         default="",
     )
+    num_outputs: int = Option(
+        description="Number of output images",
+        le=3 if IS_SDXL else 4,
+        ge=1,
+        default=1,
+    )
+    width: int = Option(
+        description="Output image width",
+        default=768 if IS_SDXL else 512,
+        ge=512,
+        le=2048 if IS_SDXL else 1024,
+    )
+    height: int = Option(
+        description="Output image height",
+        default=1344 if IS_SDXL else 768,
+        ge=512,
+        le=2048 if IS_SDXL else 1024,
+    )
     enhance_face_with_adetailer: bool = Option(
         description="Enhance face with adetailer",
         default=False,
@@ -131,36 +150,28 @@ class Input(BaseIO):
             le=3.0,
             ge=-3.0,
         )
-    num_outputs: int = Option(
-        description="Number of output images",
-        le=3 if IS_SDXL else 4,
-        ge=1,
-        default=1,
-    )
     seed: int = Option(
-        description="Same seed with the same prompt generates the same image. Set as -1 to randomize output.",
+        description="Same seed with the same prompt generates the same image. Set as -1 to randomize output.",  # noqa: E501
         default=-1,
         ge=-1,
         le=4294967293,
     )
-    width: int = Option(
-        description="Output image width",
-        default=768 if IS_SDXL else 512,
-        ge=512,
-        le=2048 if IS_SDXL else 1024,
+    input_image: Optional[Image] = Option(
+        description='Base image that the output should be generated from. This is useful when you want to add some detail to input_image. For example, if prompt is "sunglasses" and input_image has a man, there is the man wearing sunglasses in the output.',  # noqa: E501
+        default=None,
     )
-    height: int = Option(
-        description="Output image height",
-        default=1344 if IS_SDXL else 768,
-        ge=512,
-        le=2048 if IS_SDXL else 1024,
+    input_image_redrawing_strength: float = Option(
+        description="How differ the output is from input_image. Used only when input_image is given.",  # noqa: E501
+        default=0.35,
+        ge=0.0,
+        le=1.0,
     )
     reference_image: Optional[Image] = Option(
-        description="Image that the output should be similar to",
+        description="Image with which the output should share identity (e.g. face of a person or type of a dog)",  # noqa: E501
         default=None,
     )
     reference_image_strength: float = Option(
-        description="Strength of applying reference_image. Used only when reference_image is given.",
+        description="Strength of applying reference_image. Used only when reference_image is given.",  # noqa: E501
         default=1.0,
         ge=0.0,
         le=2.0,
@@ -240,10 +251,10 @@ class Input(BaseIO):
 class Output(BaseIO):
     images: List[Image]
 
+
 def _to_posix_paths(paths: List[str]) -> List[str]:
-    return [
-        Path(p).as_posix() for p in paths
-    ]
+    return [Path(p).as_posix() for p in paths]
+
 
 @define_model(
     input=Input,
@@ -289,64 +300,103 @@ class StableDiffusion:
         input = inputs[0]
 
         # Put extra loras and embeddings to its directory
-        loras: List[Path] = []
+        lora_paths: List[Path] = []
         embeddings: List[Path] = []
         try:
-            _prepare_dynamic_loras_and_embeddings(input, loras, embeddings)
+            _prepare_dynamic_loras_and_embeddings(input, lora_paths, embeddings)
 
             # Assign random seed
             if input.seed == -1:
                 input.seed = random.randrange(4294967294)
                 print(f"Using seed {input.seed}\n")
 
+            # Load VAE
             load_vae_weights(
                 os.path.join("models", "VAE", input.vae)
                 if input.vae != "None"
                 else None
             )
+
+            # Prepare settings
+            loras = self.get_loras(input) + [
+                (built_in_lora, getattr(input, field_name))
+                for field_name, built_in_lora in LORAS_IN_BASE_IMAGE.items()
+                if built_in_lora
+            ]
+            trigger_words = self.get_trigger_words(input)
+            extra_positive_prompt_chunks = (
+                []
+                if input.disable_prompt_modification
+                else self.get_extra_prompt_chunks(input)
+            )
+            extra_negative_prompt_chunks = (
+                []
+                if input.disable_prompt_modification
+                else self.get_extra_negative_prompt_chunks(input)
+            )
             try:
                 # Generate images
-                images = txt2img(
-                    prompt=input.prompt,
-                    negative_prompt=input.negative_prompt,
-                    seed=float(input.seed),
-                    sampler_name=input.sampler,
-                    batch_size=input.num_outputs,
-                    steps=input.samping_steps,
-                    cfg_scale=input.cfg_scale,
-                    width=input.width,
-                    height=input.height,
-                    clip_skip=input.clip_skip,
-                    loras=self.get_loras(input)
-                    + [
-                        (built_in_lora, getattr(input, field_name))
-                        for field_name, built_in_lora in LORAS_IN_BASE_IMAGE.items()
-                        if built_in_lora
-                    ],
-                    trigger_words=self.get_trigger_words(input),
-                    extra_positive_prompt_chunks=[]
-                    if input.disable_prompt_modification
-                    else self.get_extra_prompt_chunks(input),
-                    extra_negative_prompt_chunks=[]
-                    if input.disable_prompt_modification
-                    else self.get_extra_negative_prompt_chunks(input),
-                    controlnet_pose_image=input.reference_pose_image,
-                    controlnet_depth_image=input.reference_depth_image,
-                    controlnet_reference_only_image=input.reference_image,
-                    controlnet_pose_weight=input.reference_pose_strength,
-                    controlnet_depth_weight=input.reference_depth_strength,
-                    controlnet_reference_only_weight=input.reference_image_strength,
-                    adtailer_denoising_strength=input.adetailer_denoising_strength,
-                    enhance_face_with_adtailer=input.enhance_face_with_adetailer,
-                    enhance_hands_with_adtailer=input.enhance_hands_with_adetailer,
-                )
+                if input.input_image:
+                    images = img2img(
+                        input_image=input.input_image,
+                        denoising_strength=input.input_image_redrawing_strength,
+                        prompt=input.prompt,
+                        negative_prompt=input.negative_prompt,
+                        seed=float(input.seed),
+                        sampler_name=input.sampler,
+                        batch_size=input.num_outputs,
+                        steps=input.samping_steps,
+                        cfg_scale=input.cfg_scale,
+                        width=input.width,
+                        height=input.height,
+                        clip_skip=input.clip_skip,
+                        loras=loras,
+                        trigger_words=trigger_words,
+                        extra_positive_prompt_chunks=extra_positive_prompt_chunks,
+                        extra_negative_prompt_chunks=extra_negative_prompt_chunks,
+                        controlnet_pose_image=input.reference_pose_image,
+                        controlnet_depth_image=input.reference_depth_image,
+                        controlnet_reference_only_image=input.reference_image,
+                        controlnet_pose_weight=input.reference_pose_strength,
+                        controlnet_depth_weight=input.reference_depth_strength,
+                        controlnet_reference_only_weight=input.reference_image_strength,
+                        adtailer_denoising_strength=input.adetailer_denoising_strength,
+                        enhance_face_with_adtailer=input.enhance_face_with_adetailer,
+                        enhance_hands_with_adtailer=input.enhance_hands_with_adetailer,
+                    )
+                else:
+                    images = txt2img(
+                        prompt=input.prompt,
+                        negative_prompt=input.negative_prompt,
+                        seed=float(input.seed),
+                        sampler_name=input.sampler,
+                        batch_size=input.num_outputs,
+                        steps=input.samping_steps,
+                        cfg_scale=input.cfg_scale,
+                        width=input.width,
+                        height=input.height,
+                        clip_skip=input.clip_skip,
+                        loras=loras,
+                        trigger_words=trigger_words,
+                        extra_positive_prompt_chunks=extra_positive_prompt_chunks,
+                        extra_negative_prompt_chunks=extra_negative_prompt_chunks,
+                        controlnet_pose_image=input.reference_pose_image,
+                        controlnet_depth_image=input.reference_depth_image,
+                        controlnet_reference_only_image=input.reference_image,
+                        controlnet_pose_weight=input.reference_pose_strength,
+                        controlnet_depth_weight=input.reference_depth_strength,
+                        controlnet_reference_only_weight=input.reference_image_strength,
+                        adtailer_denoising_strength=input.adetailer_denoising_strength,
+                        enhance_face_with_adtailer=input.enhance_face_with_adetailer,
+                        enhance_hands_with_adtailer=input.enhance_hands_with_adetailer,
+                    )
 
                 return [Output(images=images)]
             finally:
                 initialize_vae()
 
         finally:
-            _cleanup_loras_and_embeddings(loras, embeddings)
+            _cleanup_loras_and_embeddings(lora_paths, embeddings)
 
     def get_loras(self, input: Input) -> List[Tuple[str, float]]:
         """
