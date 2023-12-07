@@ -162,7 +162,7 @@ class Input(BaseIO):
     )
     input_image_redrawing_strength: float = Option(
         description="How differ the output is from input_image. Used only when input_image is given.",  # noqa: E501
-        default=0.35,
+        default=0.55 if list(LORA_FILE_PATHS) else 0.4,
         ge=0.0,
         le=1.0,
     )
