@@ -326,12 +326,12 @@ class StableDiffusion:
             trigger_words = self.get_trigger_words(input)
             extra_positive_prompt_chunks = (
                 []
-                if input.disable_prompt_modification
+                if input.disable_prompt_modification or input.input_image
                 else self.get_extra_prompt_chunks(input)
             )
             extra_negative_prompt_chunks = (
                 []
-                if input.disable_prompt_modification
+                if input.disable_prompt_modification or input.input_image
                 else self.get_extra_negative_prompt_chunks(input)
             )
             try:
