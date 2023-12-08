@@ -6,16 +6,12 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+from tungstenkit import BaseIO, Binary, Field, Image, MaskedImage, Option, define_model
+
 from check_if_sdxl import check_if_sdxl
 from modules.initialize import initialize, initialize_vae, load_vae_weights
 from modules.inpaint import inpaint
-from tungstenkit import BaseIO, Binary, Field, Image, MaskedImage, Option, define_model
 
-VAE_FILE_PATHS = (
-    glob("models/VAE/*.safetensors")
-    + glob("models/VAE/*.pt")
-    + glob("models/VAE/*.ckpt")
-)
 SD_FILE_PATHS = glob("models/Stable-diffusion/*.safetensors")
 assert len(SD_FILE_PATHS) > 0, "Stable diffusion checkpoint not found"
 IS_SDXL = check_if_sdxl(SD_FILE_PATHS[0])
@@ -49,6 +45,13 @@ SAMPLERS = [
     "DPM++ 2S a Karras",
     "Restart",
 ]
+DEFAULT_SAMPLER = "Restart"
+
+VAE_FILE_PATHS = (
+    glob("models/VAE/*.safetensors")
+    + glob("models/VAE/*.pt")
+    + glob("models/VAE/*.ckpt")
+)
 SD_VAES_IN_BASE_IMAGE = [
     "vae-ft-mse-840000-ema-pruned_fp16.safetensors",
     "orangemix.vae.pt",
@@ -66,7 +69,23 @@ ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     if vae_name not in [p.split("/")[-1] for p in VAE_FILE_PATHS]
 ]
 
-DEFAULT_SAMPLER = "Restart"
+LORA_FILE_PATHS = (
+    glob("models/Lora/*.safetensors")
+    + glob("models/Lora/*.pt")
+    + glob("models/Lora/*.ckpt")
+)
+LORAS_IN_BASE_IMAGE = {
+    "detail": "add-detail-xl" if IS_SDXL else "add_detail",
+    "brightness": "TLS" if IS_SDXL else "add_brightness",
+    "contrast": "SDS_Contrast tool_XL" if IS_SDXL else "contrast_slider_v10",
+    "saturation": None if IS_SDXL else "add_saturation",
+}
+
+EMBEDDING_FILE_PATHS = (
+    glob("embeddings/*.safetensors")
+    + glob("embeddings/*.pt")
+    + glob("embeddings/*.ckpt")
+)
 
 
 class Input(BaseIO):
@@ -162,6 +181,10 @@ class Output(BaseIO):
     images: List[Image]
 
 
+def _to_posix_paths(paths: List[str]) -> List[str]:
+    return [Path(p).as_posix() for p in paths]
+
+
 @define_model(
     input=Input,
     output=Output,
@@ -171,16 +194,18 @@ class Output(BaseIO):
     include_files=[
         "configs",
         "extensions-builtin",
+        "extensions/sd-webui-controlnet",
+        "extensions/adetailer",
         "localizations",
-        "models/Stable-diffusion",
-        "models/VAE",
-        "models/Lora",
         "modules",
         "repositories",
-        "embeddings",
         "check_if_sdxl.py",
-    ],
-    base_image="mjpyeon/tungsten-sd-base:v3",
+    ]
+    + _to_posix_paths(SD_FILE_PATHS)
+    + _to_posix_paths(VAE_FILE_PATHS)
+    + _to_posix_paths(LORA_FILE_PATHS)
+    + _to_posix_paths(EMBEDDING_FILE_PATHS),
+    base_image="mjpyeon/tungsten-sd-base:v4",
 )
 class StableDiffusion:
     @staticmethod
@@ -381,10 +406,3 @@ def _compute_hash(p: Path):
             hash_sha256.update(chunk)
 
     return hash_sha256.hexdigest()
-
-if __name__ == "__main__":
-    input = Input(masked_image=MaskedImage(image=Image.from_path("00000-1330745489.png"), mask=Image.from_path("mask.png")), prompt="pretty europian girl, 25 years old", sampling_steps=20, denoising_strength=0.7, brightness=0.5)
-    model = StableDiffusion()
-    model.setup()
-    outputs = model.predict([input])
-    print(outputs[0].images[0].path)
