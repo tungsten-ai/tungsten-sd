@@ -27,14 +27,14 @@ Using this template, you can create a Stable Diffusion model in tungsten includi
 - [Python 3.7+](https://www.python.org/downloads/)
 - [Docker](https://docs.docker.com/get-docker/)
 
-### Create your Stable Diffusion model in Tungsten
-#### Step 0: Clone this repository
+### Build your Stable Diffusion model
+#### 0. Clone this repository
 ```
 git clone --recursive https://github.com/tungsten-ai/tungsten-sd.git
 cd tungsten-sd
 ```
 
-#### Step 1: Install Tungstenkit
+#### 1. Install Tungstenkit
 
 First, install [Tungstenkit](https://github.com/tungsten-ai/tungstenkit):
 
@@ -42,22 +42,24 @@ First, install [Tungstenkit](https://github.com/tungsten-ai/tungstenkit):
 pip install tungstenkit
 ```
 
-#### Step 2. Prepare weights
+#### 2. Prepare weights
 Put your Stable Diffusion model weights to ``models/Stable-diffusion``.
 
 If you want to have your own LoRA and VAE, refer to [advanced configuration](#advanced-configuration).
 
-#### Step 3. Build model
+#### 3. Build model
 
 ```bash
 tungsten build . -n tungsten-stable-diffusion
 ```
 
-#### Step 4: Create a project on Tungsten
+### Push your model & run remotely
+
+#### 1. Create a project on Tungsten
 
 Go to [tungsten.run](https://tungsten.run/new) and create a project.
 
-#### Step 5: Push the model to Tungsten
+#### 2. Push the model to Tungsten
 
 Log in to Tungsten:
 
@@ -76,10 +78,19 @@ Then, push the model to the project:
 tungsten push <YOUR_PROJECT_NAME>
 ```
 
-#### Step 6: Run the model on Tungsten
+#### 3. Run the model on Tungsten
 
 Visit [tungsten.run](https://tungsten.run) and go to the project page.
 
+### Run your model locally
+
+#### 0. Make your GPU visible to docker
+Refer to this page: [https://tungsten-ai.github.io/docs/running_models/using_gpus/](https://tungsten-ai.github.io/docs/running_models/using_gpus/)
+
+#### 1. Start demo
+```bash
+tungsten demo tungsten-stable-diffusion
+```
 
 ### Advanced configuration
 #### LoRA
