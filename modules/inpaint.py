@@ -3,7 +3,7 @@ import shutil
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
-from tungstenkit import MaskedImage, Image
+from tungstenkit import Image, MaskedImage
 
 
 def inpaint(
@@ -114,6 +114,7 @@ def inpaint(
             processing.prompts[i],
             info=processed.infotexts[i],
             p=processing,
+            extension="webp",
         )
         ret.append(Image.from_path(saved_path))
 

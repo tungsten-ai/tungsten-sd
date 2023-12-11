@@ -315,6 +315,7 @@ def img2img(
             processing.prompts[i],
             info=processed.infotexts[i],
             p=processing,
+            extension="webp",
         )
         ret.append(Image.from_path(saved_path))
 
