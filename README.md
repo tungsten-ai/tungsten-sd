@@ -3,7 +3,7 @@ This repository is for creating your own Tungsten model with a stable diffusion 
 
 Using this template, you can create a Stable Diffusion model in tungsten including followings:
 - Basic functionalities in [automatic1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (e.g. prompt syntax)
-- ControlNet - reference only, openpose & depth (currently available only for non-XL models)
+- ControlNet - reference only, openpose & depth
 - LoRA
 - Textual inversion
 - Default prompt and negative prompt
