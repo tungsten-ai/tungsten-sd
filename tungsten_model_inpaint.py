@@ -66,7 +66,7 @@ SDXL_VAES_IN_BASE_IMAGE = [
 ALL_VAE_FILE_PATHS = VAE_FILE_PATHS + [
     "models/VAE/" + vae_name
     for vae_name in (SDXL_VAES_IN_BASE_IMAGE if IS_SDXL else SD_VAES_IN_BASE_IMAGE)
-    if vae_name not in [p.split("/")[-1] for p in VAE_FILE_PATHS]
+    if vae_name not in [Path(p).name for p in VAE_FILE_PATHS]
 ]
 
 LORA_FILE_PATHS = (
@@ -144,8 +144,8 @@ class Input(BaseIO):
     )
     vae: str = Option(
         description="Select VAE",
-        default=VAE_FILE_PATHS[0].split("/")[-1] if VAE_FILE_PATHS else "None",
-        choices=["None"] + [vae_path.split("/")[-1] for vae_path in ALL_VAE_FILE_PATHS],
+        default=Path(VAE_FILE_PATHS[0]).name if VAE_FILE_PATHS else "None",
+        choices=["None"] + [Path(vae_path).name for vae_path in ALL_VAE_FILE_PATHS],
     )
     lora_1: Optional[Binary] = Option(
         description="LoRA file. Apply by writing the following in prompt: <lora:FILE_NAME_WITHOUT_EXTENSION:MAGNITUDE>",  # noqa: E501
